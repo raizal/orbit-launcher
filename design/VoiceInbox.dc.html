@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voice note inbox</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="position: relative; width: 400px; height: 400px; border-radius: 50%; overflow: hidden; background: #000; color: #F2F1EC; font-family: Inter, sans-serif">
+<svg width="400" height="400" viewBox="0 0 400 400" style="position: absolute; left: 0; top: 0" aria-hidden="true">
+<path id="inTop" d="M71.3 92 A168 168 0 0 1 328.7 92" fill="none"></path>
+<text font-family="Inter, sans-serif" font-size="13" font-weight="600" letter-spacing="2.5" fill="{{accent}}"><textPath href="#inTop" startOffset="50%" text-anchor="middle">NOTES · 2 TO SEND</textPath></text>
+<path id="inBottom" d="M71.3 308 A168 168 0 0 0 328.7 308" fill="none"></path>
+<text font-family="Inter, sans-serif" font-size="12" font-weight="500" letter-spacing="1.5" fill="#9A9A94"><textPath href="#inBottom" startOffset="50%" text-anchor="middle">TO HOME-PC · WI-FI</textPath></text>
+</svg>
+<sc-for list="{{rows}}" as="row" hint-placeholder-count="5">
+<button type="button" style="position: absolute; left: {{row.left}}px; top: {{row.top}}px; width: {{row.w}}px; height: {{row.h}}px; box-sizing: border-box; border: 0; border-radius: 999px; padding: 0 0 0 {{row.pad}}px; background: {{row.bg}}; color: #F2F1EC; opacity: {{row.op}}; display: flex; align-items: center; gap: 12px; font-family: Inter, sans-serif; text-align: left">
+<span style="position: relative; width: {{row.icon}}px; height: {{row.icon}}px; flex-shrink: 0; border-radius: 50%; background: {{row.ibg}}; color: {{row.ifg}}; display: flex; align-items: center; justify-content: center">
+<svg width="{{row.g}}" height="{{row.g}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{row.d}}"></path></svg>
+</span>
+<span style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: 'Space Grotesk', sans-serif; font-size: {{row.fs}}px; font-weight: 600">{{row.title}}</span>
+<span style="font-size: 12px; color: {{row.subc}}">{{row.sub}}</span>
+</span>
+</button>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#FFB547","options":["#FFB547","#5CD6E0","#B9F26B"]},"$preview":{"width":400,"height":400}}'>
+class Component extends DCLogic {
+renderVals() {
+const accent = this.props.accent ?? '#FFB547';
+const UP = 'M12 19V5M5 12l7-7 7 7';
+const OK = 'M20 6 9 17l-5-5';
+const WAIT = 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2';
+const items = [
+['12:41', '0:32 · waiting', WAIT, 'wait'],
+['12:08', '0:14 · sending 40%', UP, 'up'],
+['09:31', '2:05 · sent', OK, 'ok'],
+['07:02', '0:48 · sent', OK, 'ok'],
+['Yesterday 22:40', '1:12 · sent', OK, 'ok']
+];
+const ys = [74, 134, 200, 266, 326];
+const rows = items.map((it, i) => {
+const dy = ys[i] - 200;
+const focus = dy === 0 ? false : i === 1;
+const center = i === 2;
+const icon = center ? 48 : (Math.abs(dy) < 100 ? 42 : 36);
+const h = center ? 64 : icon;
+const edge = 200 - Math.sqrt(178 * 178 - dy * dy);
+const left = Math.round(edge + (center ? 18 : 30));
+const st = it[3];
+return {
+title: it[0], sub: it[1], d: it[2], icon, h, g: Math.round(icon * 0.42),
+top: Math.round(ys[i] - h / 2), left, w: 352 - left,
+pad: center ? 8 : 0,
+bg: center ? '#1C1C1A' : 'transparent',
+ibg: st === 'up' ? accent : (st === 'wait' ? '#232321' : '#161615'),
+ifg: st === 'up' ? '#141413' : (st === 'wait' ? '#F2F1EC' : '#9A9A94'),
+subc: st === 'up' ? accent : '#9A9A94',
+fs: center ? 19 : 16,
+op: center || focus ? 1 : (Math.abs(dy) < 100 ? 0.85 : 0.55)
+};
+});
+return { rows, accent };
+}
+}
+</script>
+</body>
+</html>

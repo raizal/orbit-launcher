@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Watch face spec</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#FFB547}a:hover{color:#FFD08A}
+</style>
+</helmet>
+<div style="width: 1280px; height: 1000px; box-sizing: border-box; padding: 56px 64px; background: #0B0B0A; color: #F2F1EC; font-family: Inter, sans-serif; display: flex; flex-direction: column; gap: 28px">
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<p style="margin: 0; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: #9A9A94">Face format · v1</p>
+<h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 44px; font-weight: 600; letter-spacing: -0.01em">A face is a JSON file of layers</h1>
+<p style="margin: 0; font-size: 16px; color: #C9C8C2; max-width: 860px; line-height: 1.5">Each layer type maps to one Kotlin composable already in the launcher. Values in braces are live bindings. Coordinates use a 400-unit grid ("size"); the renderer scales to the real 360 px screen, so one face file fits any round watch. No script runs on the watch — the file is data, so a bad face can't crash the launcher or drain the battery.</p>
+</div>
+
+<div style="display: flex; gap: 40px; flex-grow: 1">
+
+<div style="width: 600px; flex-shrink: 0; background: #141413; border: 1px solid #262624; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden">
+<div style="display: flex; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #262624; font-size: 13px; color: #9A9A94">
+<span style="font-family: 'JetBrains Mono', monospace">faces/orbit.face.json</span>
+<span>matches “Face · Orbit” below</span>
+</div>
+<pre style="margin: 0; padding: 18px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.55; color: #E6E5DF; white-space: pre">{
+  "id": "orbit",
+  "name": "Orbit",
+  "size": 400,
+  "theme": { "bg": "#000000", "ink": "#F2F1EC",
+             "muted": "#9A9A94", "accent": "#FFB547" },
+  "layers": [
+    { "type": "ticks", "count": 60, "r": 176,
+      "len": 5, "major": 5, "color": "muted" },
+    { "type": "arc", "r": 188, "start": 135, "sweep": 270,
+      "width": 8, "track": "#1E1E1C", "color": "accent",
+      "value": "{steps.progress}" },
+    { "type": "text", "text": "{date.EEE} {date.d}",
+      "x": 200, "y": 118, "size": 20, "font": "grotesk",
+      "color": "muted" },
+    { "type": "text", "text": "{time.HH}:{time.mm}",
+      "x": 200, "y": 196, "size": 108, "weight": 600,
+      "font": "grotesk", "color": "ink" },
+    { "type": "complication", "slot": 1, "x": 128, "y": 286,
+      "default": "weather" },
+    { "type": "complication", "slot": 2, "x": 200, "y": 286,
+      "default": "voice_note" },
+    { "type": "complication", "slot": 3, "x": 272, "y": 286,
+      "default": "battery" }
+  ],
+  "ambient": { "hide": ["arc", "complication"],
+               "ink": "#77766F" },
+  "tweaks": { "accent": ["#FFB547", "#5CD6E0", "#B9F26B"] }
+}</pre>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 24px; flex-grow: 1; min-width: 0">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">Layer → composable</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: #262624; border-radius: 12px; overflow: hidden; font-size: 13.5px">
+<div style="background: #1C1C1A; padding: 9px 12px; color: #9A9A94">JSON type</div>
+<div style="background: #1C1C1A; padding: 9px 12px; color: #9A9A94">Kotlin</div>
+<div style="background: #1C1C1A; padding: 9px 12px; color: #9A9A94">Draws</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">text</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceText()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">Time, date, any binding</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">curvedText</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceCurvedText()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">Text along the rim</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">arc</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceArc()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">Progress gauge on a circle</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">ticks</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceTicks()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">Minute / hour marks</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">hands</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceHands()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">Analog h / m / s</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">complication</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">ComplicationSlot()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">User-chosen data, tappable</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">image</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceImage()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">PNG / vector from the face folder</div>
+<div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">group</div><div style="background: #141413; padding: 9px 12px; font-family: 'JetBrains Mono', monospace">FaceGroup()</div><div style="background: #141413; padding: 9px 12px; color: #C9C8C2">Rotate / offset / ambient-hide a set</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">Bindings</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px">
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">time.HH · mm · ss</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">date.EEE · d · MMM</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">battery.level</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">steps.count · progress</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">net.lte · wifi</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">weather.temp · icon</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 6px 12px">notif.unread</span>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">Pipeline</h2>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; font-size: 13.5px; line-height: 1.4">
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">01</div><div style="margin-top: 4px; color: #C9C8C2">Write JSON — or TSX on a PC that compiles to JSON</div></div>
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">02</div><div style="margin-top: 4px; color: #C9C8C2">Push to /faces via adb or a phone link</div></div>
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">03</div><div style="margin-top: 4px; color: #C9C8C2">Parse + validate (kotlinx.serialization)</div></div>
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">04</div><div style="margin-top: 4px; color: #C9C8C2">Render on one Compose Canvas; hot-reload</div></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1000}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voice note spec</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#FFB547}a:hover{color:#FFD08A}
+</style>
+</helmet>
+<div style="width: 1280px; height: 1100px; box-sizing: border-box; padding: 56px 64px; background: #0B0B0A; color: #F2F1EC; font-family: Inter, sans-serif; display: flex; flex-direction: column; gap: 28px">
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<p style="margin: 0; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: #9A9A94">Voice notes · watch side</p>
+<h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 44px; font-weight: 600; letter-spacing: -0.01em">Record in one press. Never lose a note.</h1>
+<p style="margin: 0; font-size: 16px; color: #C9C8C2; max-width: 900px; line-height: 1.5">The watch only records, names, queues and sends. All thinking — transcription and the diary — happens on the companion. A note is deleted from the watch only after the server confirms it has the exact same file.</p>
+</div>
+
+<div style="display: flex; gap: 40px; flex-grow: 1">
+
+<div style="width: 560px; flex-shrink: 0; display: flex; flex-direction: column; gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">1 · Ways to start recording</h2>
+<ol style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14.5px; line-height: 1.45; color: #C9C8C2">
+<li><strong style="color: #F2F1EC">BACK button on the face</strong> — one press, no looking.</li>
+<li><strong style="color: #F2F1EC">Mic slot on the face</strong> — one tap.</li>
+<li><strong style="color: #F2F1EC">Center of the app grid</strong> — home, then tap.</li>
+<li><strong style="color: #9A9A94">Later, optional:</strong> hold BACK from any app, via an accessibility service.</li>
+</ol>
+<p style="margin: 0; font-size: 13.5px; line-height: 1.45; color: #9A9A94">Recording runs in a foreground service with a partial wake lock, so it keeps going with the screen off and survives the launcher being closed.</p>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">2 · The file</h2>
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 14px 16px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6">
+<div style="color: #FFB547">2026-11-13_12-08-42+0700.m4a</div>
+<div style="color: #9A9A94">2026-11-13_12-08-42+0700.json</div>
+</div>
+<p style="margin: 0; font-size: 13.5px; line-height: 1.45; color: #C9C8C2">Name = the moment you pressed record, local time + offset. Sorts by name, readable, safe on every filesystem (no colons). AAC-LC, 16 kHz, mono, 32 kbps ≈ 14 MB per hour — good for speech-to-text. Android 8.1 cannot write Opus, so m4a.</p>
+<pre style="margin: 0; padding: 14px 16px; background: #141413; border: 1px solid #262624; border-radius: 12px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.55; color: #E6E5DF; white-space: pre">{
+  "id": "0193c2a4-7f1e-7c3a-9b1d-5e2f8a6c4d10",
+  "started_at": "2026-11-13T12:08:42+07:00",
+  "duration_ms": 14230,
+  "sha256": "9f2c…e81a",
+  "device": "H10",
+  "location": { "lat": -7.26, "lon": 112.75, "acc_m": 900 }
+}</pre>
+<p style="margin: 0; font-size: 13px; color: #9A9A94">Location is optional and coarse. The JSON is the truth — file times can change when copied.</p>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 24px; flex-grow: 1; min-width: 0">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">3 · Finding a server</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; font-size: 13.5px; line-height: 1.4">
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">FIRST</div><div style="margin-top: 4px; font-weight: 600">Last known IP, then mDNS</div><div style="margin-top: 4px; color: #C9C8C2">Cached address first; then <span style="font-family: 'JetBrains Mono', monospace">_orbitnotes._tcp</span> via NsdManager</div></div>
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">THEN</div><div style="margin-top: 4px; font-weight: 600">Subnet scan</div><div style="margin-top: 4px; color: #C9C8C2">Probe port 8765 on the /24, 32 at a time, 300 ms timeout</div></div>
+<div style="background: #141413; border: 1px solid #262624; border-radius: 12px; padding: 12px"><div style="color: #FFB547; font-family: 'JetBrains Mono', monospace; font-size: 12px">ONCE</div><div style="margin-top: 4px; font-weight: 600">Pairing</div><div style="margin-top: 4px; color: #C9C8C2">QR with name + token. Watch remembers the home Wi-Fi; never scans other networks</div></div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">4 · Upload API</h2>
+<pre style="margin: 0; padding: 14px 16px; background: #141413; border: 1px solid #262624; border-radius: 12px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.6; color: #E6E5DF; white-space: pre">GET  /v1/health?nonce=N   → { "name", "api": 1, "proof": HMAC(token, N) }
+HEAD /v1/notes/{id}       → 200 already have it · 404 send it
+PUT  /v1/notes/{id}       multipart: audio + meta.json
+     Authorization: Bearer &lt;token&gt;
+     → 201 { "id": "…", "sha256": "…" }</pre>
+<p style="margin: 0; font-size: 13.5px; line-height: 1.45; color: #C9C8C2">PUT with the note's own id is safe to repeat: a retry after a dropped Wi-Fi connection never makes a duplicate. The proof check stops another device on the network from pretending to be the server.</p>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">5 · Send rules</h2>
+<ol style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.45; color: #C9C8C2">
+<li>Local only: sends only on the paired home Wi-Fi, never on LTE. One WorkManager job per note; retries 30 s → 1 h; also runs when that Wi-Fi connects.</li>
+<li>Plain HTTP on the LAN; allow cleartext for local addresses only (network security config).</li>
+<li>Marked sent only when the server's sha256 matches.</li>
+<li>Sent notes stay 7 days, then delete. Unsent notes are never deleted.</li>
+</ol>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">Companion (receives)</h2>
+<div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13.5px">
+<span style="background: #1C1C1A; border-radius: 999px; padding: 8px 14px">Receive</span><span style="color: #4A4A46">→</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 8px 14px">Store by date</span><span style="color: #4A4A46">→</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 8px 14px">Transcribe</span><span style="color: #4A4A46">→</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 8px 14px">Daily diary</span><span style="color: #4A4A46">→</span>
+<span style="background: #1C1C1A; border-radius: 999px; padding: 8px 14px; border: 1px solid #FFB547">Markdown / Obsidian</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1100}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

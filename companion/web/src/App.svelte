@@ -35,7 +35,8 @@
     const d = day
     const [n, p] = await Promise.all([api.notes(d), api.diary(d)])
     if (d === day) {
-      notes = n
+      // Newest first for review; the API (and the diary page) keep time order.
+      notes = [...n].sort((a, b) => b.started_at.localeCompare(a.started_at))
       diary = p
     }
   }

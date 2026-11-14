@@ -1,5 +1,7 @@
 package com.orbit.voice.upload
 
+import com.orbit.voice.talk.History
+import com.orbit.voice.talk.HistoryParser
 import com.orbit.voice.talk.Reply
 import com.orbit.voice.talk.ReplyParser
 import kotlinx.serialization.Serializable
@@ -81,6 +83,18 @@ class OrbitClient(socketFactory: SocketFactory = SocketFactory.getDefault()) {
         http.newCall(
             Request.Builder().url("http://$ip:$port/v1/notes/$id/reply").header("Authorization", "Bearer $token").build()
         ).execute().use { r -> ReplyParser.parse(r.code, r.body.string(), id) }
+
+    /**
+     * GET /v1/talk/history (docs/talk.md → Conversations & history). Throws on
+     * network errors, non-200 (404 = companion too old) and an unreadable body.
+     */
+    fun history(ip: String, port: Int, token: String, limit: Int): History =
+        http.newCall(
+            Request.Builder().url("http://$ip:$port/v1/talk/history?limit=$limit").header("Authorization", "Bearer $token").build()
+        ).execute().use { r ->
+            if (r.code != 200) throw HttpError(r.code)
+            HistoryParser.parse(r.body.string()) ?: throw java.io.IOException("unreadable history")
+        }
 
     /** Downloads [path] (e.g. `/v1/notes/{id}/reply.wav`) from the companion into [dest]. */
     fun download(ip: String, port: Int, token: String, path: String, dest: File) {

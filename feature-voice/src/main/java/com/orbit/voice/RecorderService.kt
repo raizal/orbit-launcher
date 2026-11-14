@@ -32,6 +32,7 @@ class RecorderService : Service() {
     private var startedAtMs = 0L
     private var startElapsed = 0L
     private var mode: String? = null
+    private var conversation: String? = null
     private val handler = Handler(Looper.getMainLooper())
 
     private val ticker = object : Runnable {
@@ -58,6 +59,7 @@ class RecorderService : Service() {
             ACTION_START -> start(
                 intent.getLongExtra(EXTRA_PRESSED_AT, System.currentTimeMillis()),
                 intent.getStringExtra(EXTRA_MODE),
+                intent.getStringExtra(EXTRA_CONVERSATION),
             )
             ACTION_STOP -> stop()
             else -> if (recorder == null) stopSelf()
@@ -65,7 +67,7 @@ class RecorderService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun start(pressedAtMs: Long, mode: String?) {
+    private fun start(pressedAtMs: Long, mode: String?, conversation: String?) {
         if (recorder != null) return
         startForeground(NOTIFICATION_ID, notification())
 
@@ -94,6 +96,7 @@ class RecorderService : Service() {
         temp = file
         startedAtMs = pressedAtMs
         this.mode = mode
+        this.conversation = conversation
         startElapsed = SystemClock.elapsedRealtime()
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "orbit:voice")
@@ -117,7 +120,7 @@ class RecorderService : Service() {
 
         val file = temp!!
         if (stopped) {
-            runCatching { store.finalize(file, startedAtMs, durationMs, mode = mode) }
+            runCatching { store.finalize(file, startedAtMs, durationMs, mode = mode, conversation = conversation) }
                 .onSuccess {
                     broadcast(RecorderState.saved(it.name, durationMs))
                     NoteSavedReceiver.notify(this)
@@ -173,6 +176,8 @@ class RecorderService : Service() {
         const val EXTRA_PRESSED_AT = "pressed_at"
         /** Optional note mode for the sidecar (`"talk"`); absent = normal note. */
         const val EXTRA_MODE = "mode"
+        /** Optional sidecar `conversation` (`"new"` = start a new Talk conversation). */
+        const val EXTRA_CONVERSATION = "conversation"
         private const val TAG = "OrbitVoice"
         private const val CHANNEL = "recording"
         private const val NOTIFICATION_ID = 7

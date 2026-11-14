@@ -225,7 +225,8 @@ private fun ItemRow(item: InboxItem, slot: Int, now: Long, onClick: () -> Unit) 
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                BasicText(
+                // Edge rows: title only, so nothing runs into the curved rim labels.
+                if (abs(dy) < 100) BasicText(
                     InboxLogic.age(item.created_at, now) + if (item.body.isNotBlank()) " · ${item.body}" else "",
                     style = TextStyle(fontFamily = OrbitFonts.Inter, fontSize = 12.sp, color = OrbitColors.Muted),
                     maxLines = 1,

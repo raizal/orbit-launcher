@@ -19,8 +19,10 @@ from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import actions, diary, insights
+from . import actions, appupdate, diary, insights
 from .config import Config
+from .inbox import shared as shared_inbox
+from .inbox_api import mount_inbox_ui
 from .store import Note, Store
 from .talk import PERSONA, reply_paths
 
@@ -98,6 +100,7 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
             "llm_provider": cfg.llm_provider,
             "diary_dir": str(cfg.diary_dir),
             "vault_dir": str(cfg.vault_dir) if cfg.vault_dir else None,
+            "app": (rel := appupdate.latest(cfg.data_dir)) and rel.public(),  # published watch build, or null
         }
 
     @api.get("/days")
@@ -235,6 +238,7 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
     from .memory_api import mount_memory_api
 
     mount_memory_api(api, memory or Memory(cfg, store))
+    mount_inbox_ui(api, *shared_inbox(cfg))  # docs/inbox.md
     app.include_router(api)
 
     @app.get("/", include_in_schema=False, dependencies=[Depends(require_local)])

@@ -40,6 +40,13 @@ export const api = {
   memoryForgotten: () => call('/memory/forgotten'),
   memoryForget: (query, preview) => call('/memory/forget', json('POST', { query, preview })),
   memoryUnforget: (id) => call(`/memory/forgotten/${id}`, { method: 'DELETE' }),
+  inbox: () => call('/inbox'),
+  addInbox: (item) => call('/inbox', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item),
+  }),
+  readInbox: (id, read = true) => call(`/inbox/${id}/read`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ read }),
+  }),
   days: () => call('/days'),
   notes: (day) => call(`/notes?day=${day}`),
   retranscribe: (id) => call(`/notes/${id}/transcribe`, { method: 'POST' }),

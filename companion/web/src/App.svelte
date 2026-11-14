@@ -3,6 +3,7 @@
   import { api, fmtDay, fmtDuration, fmtTime, todayIso } from './api.js'
   import { renderDiary } from './markdown.js'
   import MemoryPanel from './MemoryPanel.svelte'
+  import Inbox from './Inbox.svelte'
 
   let status = $state(null)
   let days = $state([])
@@ -18,6 +19,8 @@
   let showSource = $state(false)
   let talk = $state(null) // { workspace, pending, audit, settings, voices }
   let showTalk = $state(false)
+  let inbox = $state(null) // { unread, items } — docs/inbox.md
+  let showInbox = $state(false)
   // Talk settings form: a draft edited locally, saved with PUT /talk/settings.
   let draft = $state(null) // { voice, length_scale, reply_length, personality }
   let saving = $state(false)
@@ -46,7 +49,7 @@
 
   async function loadOverview() {
     const wasDirty = dirty
-    ;[status, days, talk] = await Promise.all([api.status(), api.days(), api.talk()])
+    ;[status, days, talk, inbox] = await Promise.all([api.status(), api.days(), api.talk(), api.inbox()])
     // Follow changes made meanwhile (e.g. confirmed by voice on the watch) unless the form has unsaved edits.
     if (draft && !wasDirty) draft = pickSettings(talk.settings)
     if (!day) day = days[0]?.date ?? todayIso()
@@ -174,7 +177,7 @@
   })
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showMood = false), (showMemory = false), closeTalk())} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showMood = false), (showInbox = false), (showMemory = false), closeTalk())} />
 
 <header>
   <div class="brand">
@@ -190,6 +193,11 @@
       </span>
       <span class="muted">whisper {status.whisper_model} · diary LLM {status.llm_provider}</span>
       {#if !status.worker}<span class="warn">transcription worker off</span>{/if}
+      {#if status.app}
+        <span class="muted" title={`Published ${status.app.published_at} · sha256 ${status.app.sha256}`}>
+          watch app {status.app.version_name} (#{status.app.version_code})
+        </span>
+      {:else}<span class="muted">no watch app published</span>{/if}
     </div>
   {/if}
   <button onclick={openTalk}>
@@ -197,6 +205,9 @@
   </button>
   <button onclick={openMood} title="Private: estimates only, never shown on the watch">Mood</button>
   <button onclick={() => (showMemory = true)} title="Search your notes; facts Orbit remembers">Memory</button>
+  <button onclick={() => (showInbox = true)}>
+    Inbox{#if inbox?.unread}<span class="pending-dot unread-dot" title="{inbox.unread} unread on the watch"></span>{/if}
+  </button>
   <button onclick={() => (showPair = true)}>Pair watch</button>
 </header>
 
@@ -353,6 +364,10 @@
       <button onclick={() => (showMood = false)}>Close</button>
     </div>
   </div>
+{/if}
+
+{#if showInbox && inbox}
+  <Inbox {inbox} onchange={async () => (inbox = await api.inbox())} onclose={() => (showInbox = false)} />
 {/if}
 
 {#if showTalk && talk}
@@ -553,6 +568,7 @@
   .card img { width: 260px; height: 260px; border-radius: 12px; background: #fff; margin: 8px 0; }
   .small-print { font-size: 12px; }
   .pending-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rec); margin-left: 8px; vertical-align: middle; }
+  .unread-dot { background: var(--accent); }
   .talk-card { max-width: 640px; width: 92vw; max-height: 86vh; overflow: auto; text-align: left; }
   .talk-card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin: 18px 0 8px; }
   .pending { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; }

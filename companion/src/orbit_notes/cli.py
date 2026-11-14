@@ -147,6 +147,69 @@ def memory_search(query: str, config: ConfigOpt = None, limit: int = 8,
     for h in mem.search(query, limit=limit, date_from=a, date_to=b):
         sim = f"{h.sim:.3f}" if h.sim is not None else "  -  "
         typer.echo(f"{h.score:.4f} sim {sim}{' kw' if h.keyword else '   '}  {h.when()}  {h.label()}: {h.text[:160]}")
+inbox_app = typer.Typer(no_args_is_help=True, help="Orbit Inbox: send short items to the watch (docs/inbox.md).")
+app.add_typer(inbox_app, name="inbox")
+
+
+@inbox_app.command("add")
+def inbox_add(title: Annotated[str, typer.Option(help="Short, spoken-friendly title")],
+              body: Annotated[str, typer.Option(help="One or two sentences")] = "",
+              kind: Annotated[str, typer.Option(help="note, thread_done, app_update, ...")] = "note",
+              ref: Annotated[Optional[str], typer.Option(help="Reference, e.g. a BB thread id")] = None,
+              config: ConfigOpt = None):
+    """Add an item; the watch picks it up on its next check (works with or without `serve` running)."""
+    from .inbox import Inbox, InvalidItem, NewItem
+
+    cfg = config_mod.load(config)
+    try:
+        item = Inbox(cfg.data_dir).add(NewItem(title=title, body=body, kind=kind, ref=ref))
+    except InvalidItem as e:
+        raise typer.BadParameter(str(e)) from None
+    typer.echo(json.dumps(item.public()))
+
+
+@inbox_app.command("list")
+def inbox_list(limit: int = typer.Option(20, help="How many, newest first"), config: ConfigOpt = None):
+    """Newest items with their read state."""
+    from .inbox import Inbox
+
+    cfg = config_mod.load(config)
+    for i in Inbox(cfg.data_dir).latest(limit):
+        typer.echo(f"{i.created_at[:16]}  {'  ' if i.read_at else '● '}{i.id}  [{i.kind}] {i.title}"
+                   + (f" — {i.body[:80]}" if i.body else ""))
+
+
+@inbox_app.command("read")
+def inbox_read(item_id: str, unread: bool = typer.Option(False, "--unread", help="Mark unread instead"),
+               config: ConfigOpt = None):
+    """Mark an item read (or unread)."""
+    from .inbox import Inbox
+
+    cfg = config_mod.load(config)
+    item = Inbox(cfg.data_dir).mark_read(item_id, read=not unread)
+    if not item:
+        raise typer.BadParameter(f"no inbox item {item_id}")
+    typer.echo(json.dumps(item.public()))
+
+
+@app.command("publish-apk")
+def publish_apk(apk: Annotated[Path, typer.Argument(help="Release APK, e.g. app/build/outputs/apk/release/app-release.apk")],
+                config: ConfigOpt = None,
+                version_code: Annotated[Optional[int], typer.Option(help="Default: from output-metadata.json next to the APK")] = None,
+                version_name: Annotated[Optional[str], typer.Option(help="Default: from output-metadata.json next to the APK")] = None,
+                force: bool = typer.Option(False, "--force", help="Replace even if the versionCode is not higher")):
+    """Publish an Orbit build for the watch to update itself over Wi-Fi (docs/companion.md -> App updates)."""
+    from . import appupdate
+
+    cfg = config_mod.load(config)
+    try:
+        rel = appupdate.publish(cfg.data_dir, apk.expanduser(), version_code, version_name, force=force)
+    except appupdate.PublishError as e:
+        typer.echo(f"Not published: {e}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"Published Orbit {rel.version_name} (versionCode {rel.version_code}, {rel.size} bytes, sha256 {rel.sha256[:12]}…)")
+    typer.echo(f"→ {appupdate.app_dir(cfg.data_dir) / rel.file}. The watch offers it at its next check (home Wi-Fi connect, "
+               "after uploads, or every 6 h; Servers screen → refresh checks now).")
 
 
 def main() -> None:

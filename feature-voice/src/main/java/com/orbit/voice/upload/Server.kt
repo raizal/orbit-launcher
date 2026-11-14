@@ -9,10 +9,25 @@ import android.net.wifi.WifiManager
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.net.Inet4Address
+import java.security.MessageDigest
 
 /** What the companion's pairing QR contains (no IP: discovery finds it). */
 @Serializable
-data class Pairing(val name: String, val port: Int = 8765, val token: String)
+data class Pairing(val name: String, val port: Int = 8765, val token: String) {
+    /**
+     * Identifies this companion without revealing its token: first 16 hex of
+     * sha256(name + "\n" + token). Recorded with every "sent" so a note sent to
+     * one companion never counts as sent to another (docs/voice-notes.md).
+     * The port is left out: the same companion moved to another port is the same server.
+     */
+    val fingerprint: String get() = fingerprintOf(name, token)
+
+    companion object {
+        fun fingerprintOf(name: String, token: String): String =
+            MessageDigest.getInstance("SHA-256").digest("$name\n$token".toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }.take(16)
+    }
+}
 
 /**
  * The paired companion and the "home" Wi-Fi it lives on. Plain private prefs

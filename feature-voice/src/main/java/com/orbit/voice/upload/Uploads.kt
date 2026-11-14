@@ -19,6 +19,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.orbit.voice.NoteStore
+import com.orbit.voice.inbox.InboxSync
+import com.orbit.voice.update.AppUpdates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -105,6 +107,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             ?: return@withContext Result.retry().also { Log.i(TAG, "server not found") }
 
         var transient = false
+        var sent = 0
         for (note in pending) {
             val meta = note.meta
             val metaFile = File(NoteStore(applicationContext).dir, note.stem + ".json")
@@ -128,7 +131,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 // HEAD 200: the server stored this id earlier, and it only stores after
                 // checking the audio against meta.sha256 — so it is safely there.
                 prefs.lastIp = ip
-                queue.markSent(note.stem)
+                queue.markSent(note.stem, pairing.fingerprint) // the companion this run talked to
+                sent++
                 Log.i(TAG, "sent ${note.stem}")
             } catch (e: OrbitClient.HttpError) {
                 val msg = when (e.code) {
@@ -148,6 +152,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 Progress.changed()
             }
         }
+        if (sent > 0) InboxSync.kick(applicationContext) // a cheap moment: we just reached the companion
+        AppUpdates.checkSoon(applicationContext) // a cheap moment: on home Wi-Fi, companion just answered
         if (transient) Result.retry() else Result.success()
     }
 
@@ -164,7 +170,10 @@ class SweepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     }
 }
 
-/** Deletes notes the server confirmed more than 7 days ago. Unsent notes are never touched. */
+/**
+ * Deletes notes the *currently paired* companion confirmed more than 7 days ago.
+ * Unsent notes, and notes sent only to some other companion, are never touched.
+ */
 class CleanupWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val n = Queue(applicationContext).deleteSentOlderThan(Uploads.KEEP_SENT_MS)

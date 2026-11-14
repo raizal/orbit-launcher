@@ -64,6 +64,8 @@ import com.orbit.core.RotaryEffect
 import com.orbit.core.SvgIcon
 import com.orbit.voice.CancelButton
 import com.orbit.voice.TICKS
+import com.orbit.voice.inbox.INBOX_ICON
+import com.orbit.voice.inbox.InboxItem
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.cos
@@ -88,6 +90,7 @@ fun TalkScreen(
     onSkip: () -> Unit,
     onReplay: (TalkTurn) -> Unit,
     onNew: () -> Unit,
+    inbox: TalkInbox = TalkInbox(),
 ) {
     Box(Modifier.fillMaxSize()) {
         Rim(state, levels)
@@ -96,17 +99,28 @@ fun TalkScreen(
             is TalkUi.Waiting -> Waiting(state)
             is TalkUi.Speaking -> Reply(state.text, onSkip)
             // Resting states: the conversation, with the new turn in it.
-            is TalkUi.Idle -> HistoryView(history, fresh, playingStem, state.note, serverName, onStart, onReplay, onNew)
-            is TalkUi.Done -> HistoryView(history, fresh, playingStem, null, serverName, onStart, onReplay, onNew)
-            is TalkUi.Later -> HistoryView(history, fresh, playingStem, null, serverName, onStart, onReplay, onNew)
-            is TalkUi.Failed -> HistoryView(history, fresh, playingStem, state.message, serverName, onStart, onReplay, onNew)
+            is TalkUi.Idle -> HistoryView(history, fresh, playingStem, state.note, serverName, onStart, onReplay, onNew, inbox)
+            is TalkUi.Done -> HistoryView(history, fresh, playingStem, null, serverName, onStart, onReplay, onNew, inbox)
+            is TalkUi.Later -> HistoryView(history, fresh, playingStem, null, serverName, onStart, onReplay, onNew, inbox)
+            is TalkUi.Failed -> HistoryView(history, fresh, playingStem, state.message, serverName, onStart, onReplay, onNew, inbox)
         }
     }
 }
 
 /**
+ * Inbox on the Talk screen (docs/inbox.md): [about] = the item the next turn is about (shown
+ * as a card at the bottom of the conversation; ✕ drops it), [unread] for the Inbox pill.
+ */
+data class TalkInbox(
+    val about: InboxItem? = null,
+    val unread: Int = 0,
+    val onOpen: () -> Unit = {},
+    val onClearAbout: () -> Unit = {},
+)
+
+/**
  * The conversation, newest at the bottom (reverse layout keeps it anchored there),
- * crown + drag scroll. "New" on top, the big talk button below.
+ * crown + drag scroll. "New" and "Inbox" on top, the big talk button below.
  */
 @Composable
 private fun HistoryView(
@@ -118,20 +132,23 @@ private fun HistoryView(
     onStart: () -> Unit,
     onReplay: (TalkTurn) -> Unit,
     onNew: () -> Unit,
+    inbox: TalkInbox,
 ) {
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     // Clockwise = later (down). In a reversed list, later is toward index 0.
     RotaryEffect { step -> scope.launch { list.animateScrollBy(-step * 48f) } }
     val newest = turns.lastOrNull()?.stem
-    LaunchedEffect(newest, note) { list.scrollToItem(0) }
+    LaunchedEffect(newest, note, inbox.about?.id) { list.scrollToItem(0) }
 
-    if (turns.isNotEmpty() || !fresh) {
-        // Visible 96 × 36; the touch target is 120 × 72.
+    val showNew = turns.isNotEmpty() || !fresh
+    InboxPill(inbox, x = if (showNew) 200 else 146)
+    if (showNew) {
+        // Visible 96 × 36; the touch target is 108 × 72 (left of the Inbox pill).
         Box(
             Modifier
-                .offset(140.dp, 22.dp)
-                .size(120.dp, 72.dp)
+                .offset(92.dp, 22.dp)
+                .size(108.dp, 72.dp)
                 .clickable(onClick = onNew)
                 .semantics { contentDescription = "New conversation" },
             contentAlignment = Alignment.Center,
@@ -146,11 +163,9 @@ private fun HistoryView(
                 BasicText("New", style = style(13, FontWeight.SemiBold))
             }
         }
-    } else {
-        Label("NEW CONVERSATION", top = 50.dp, color = OrbitColors.Muted)
     }
 
-    if (turns.isEmpty()) {
+    if (turns.isEmpty() && inbox.about == null) {
         Box(
             Modifier.offset(168.dp, 116.dp).size(64.dp).clip(CircleShape).background(OrbitColors.Surface),
             contentAlignment = Alignment.Center,
@@ -159,6 +174,7 @@ private fun HistoryView(
         }
         val line = when {
             note != null -> note
+            serverName != null && fresh -> "New conversation"
             serverName != null -> "Feedback from $serverName"
             else -> "Not paired — saved as notes"
         }
@@ -173,6 +189,7 @@ private fun HistoryView(
             reverseLayout = true,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            inbox.about?.let { item -> item(key = "about") { AboutCard(item, inbox.onClearAbout) } }
             if (note != null) item(key = "note") {
                 BasicText(
                     note,
@@ -203,6 +220,77 @@ private fun HistoryView(
             SvgIcon(BUBBLE_ICON, 22.dp, OrbitColors.OnAccent)
             Spacer(Modifier.width(8.dp))
             BasicText("Tap to talk", style = style(15, FontWeight.SemiBold, color = OrbitColors.OnAccent))
+        }
+    }
+}
+
+/** "Inbox" (or "2 new"): visible 96 × 36, touch 108 × 72. Opens the inbox list. */
+@Composable
+private fun InboxPill(inbox: TalkInbox, x: Int) {
+    val unread = inbox.unread > 0
+    Box(
+        Modifier
+            .offset(x.dp, 22.dp)
+            .size(108.dp, 72.dp)
+            .clickable(onClick = inbox.onOpen)
+            .semantics { contentDescription = if (unread) "Inbox, ${inbox.unread} new" else "Inbox" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.size(96.dp, 36.dp).clip(RoundedCornerShape(50)).background(OrbitColors.Surface),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SvgIcon(INBOX_ICON, 14.dp, if (unread) OrbitColors.Accent else OrbitColors.Ink)
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                if (unread) "${inbox.unread} new" else "Inbox",
+                style = style(13, FontWeight.SemiBold, color = if (unread) OrbitColors.Accent else OrbitColors.Ink),
+            )
+        }
+    }
+}
+
+/** The inbox item the next turn is about: full text, scrolls with the conversation. ✕ = not about it. */
+@Composable
+private fun AboutCard(item: InboxItem, onClear: () -> Unit) {
+    Column(
+        Modifier
+            .padding(top = 10.dp, bottom = 8.dp)
+            .width(264.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(OrbitColors.Surface)
+            .padding(start = 16.dp, bottom = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SvgIcon(INBOX_ICON, 13.dp, OrbitColors.Accent)
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                "TALKING ABOUT",
+                Modifier.weight(1f),
+                style = style(11, FontWeight.SemiBold, color = OrbitColors.Accent).copy(letterSpacing = 0.12.em),
+            )
+            Box(
+                Modifier
+                    .size(64.dp, 48.dp)
+                    .clickable(onClick = onClear)
+                    .semantics { contentDescription = "Not about this item" },
+                contentAlignment = Alignment.Center,
+            ) {
+                SvgIcon(CLOSE_ICON, 16.dp, OrbitColors.Muted, strokeWidth = 2.4f)
+            }
+        }
+        BasicText(
+            item.title,
+            Modifier.padding(end = 16.dp),
+            style = style(16, FontWeight.SemiBold, OrbitFonts.Grotesk).copy(lineHeight = 21.sp),
+        )
+        if (item.body.isNotBlank()) {
+            BasicText(
+                item.body,
+                Modifier.padding(top = 6.dp, end = 16.dp),
+                style = style(13, FontWeight.Normal, color = OrbitColors.Muted).copy(lineHeight = 18.sp),
+            )
         }
     }
 }
@@ -411,15 +499,6 @@ private fun Pill(label: String, top: Dp, primary: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
-private fun Label(text: String, top: Dp, color: Color) {
-    BasicText(
-        text,
-        Modifier.offset(y = top).width(400.dp),
-        style = style(13, FontWeight.SemiBold, OrbitFonts.Inter, color).copy(textAlign = TextAlign.Center, letterSpacing = 0.14.em),
-    )
-}
-
-@Composable
 private fun CenterText(
     text: String,
     top: Dp,
@@ -465,6 +544,7 @@ private fun mmss(ms: Long): String {
 private const val PLUS_ICON = "M5 12h14M12 5v14"
 private const val PLAY_ICON = "M7 4l13 8-13 8Z"
 private const val STOP_ICON = "M6 6h12v12H6Z"
+private const val CLOSE_ICON = "M18 6 6 18M6 6l12 12"
 
 /** lucide `message-circle`. */
 const val BUBBLE_ICON = "M7.9 20A9 9 0 1 0 4 16.1L2 22Z"

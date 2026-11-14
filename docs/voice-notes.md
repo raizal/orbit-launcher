@@ -52,7 +52,8 @@ Rule: one press from the face must start recording within 1 second, with a short
 }
 ```
 
-`location` is optional and coarse (last known location only; never wait for a GPS fix). **Not written yet** (the watch has no last-known location without a fix). A sidecar may also carry `"recovered": true` (finalized after a crash).
+`location` is optional and coarse (last known location only; never wait for a GPS fix). **Not written yet** (the watch has no last-known location without a fix). A sidecar may also carry `"recovered": true` (finalized after a crash). Talk turns add `"mode": "talk"`,
+optionally `"conversation": "new"` (docs/talk.md) and `"about": "<inbox item id>"` (docs/inbox.md).
 
 ## Queue & states
 
@@ -62,7 +63,9 @@ Rule: one press from the face must start recording within 1 second, with a short
 - **As built:** one WorkManager unique work `upload-queue` that sends every unsent note oldest-first (no parallel uploads on the slow watch), constraint `UNMETERED`, exponential backoff from 30 s. It is triggered by: a saved note (explicit broadcast from the `:voice` process), the Wi-Fi connecting (`NetworkCallback`, replaces a backed-off run), and a 15-min periodic sweep. Not on home Wi-Fi → it ends quietly and waits for the next trigger. Measured: offline note uploads ~35 s after Wi-Fi returns.
 - Upload state lives in `files/queue/<stem>.json` (main process only); the notes folder is the source of truth (no entry = waiting).
 - Mark `sent` only when the server returns the same sha256.
-- **Never delete an unsent note.** Sent notes are kept 7 days, then deleted by a daily cleanup job.
+- **"Sent" means sent to the companion paired now.** The entry records *which* companion confirmed the note: `"sentTo": {"<fingerprint>": <sentAtMs>}`, fingerprint = first 16 hex of sha256(`name + "\n" + token`) of the pairing (never the token itself; port left out). A note counts as `sent` only if the current pairing's fingerprint is in `sentTo`; otherwise it is `waiting` again and the queue re-sends it (HEAD first, so a companion that already has it is not uploaded to again; PUT is idempotent). Re-pairing back to a companion that already confirmed it shows it `sent` at once. Unpaired → nothing counts as sent.
+- Entries we write have `state` `WAITING` or `FAILED` only (FAILED keeps `sentTo`). Legacy entries (`"state":"SENT"` + `sentAtMs`, no `sentTo`, from builds before per-server tracking) are stamped once with the pairing current at the first run after the update (marker file `files/queue/.sent-per-server-v1`; runs only while paired). A legacy entry that appears after that (an older build installed over ours) counts as unsent, never as sent to whoever is paired.
+- **Never delete an unsent note.** Notes sent to the *current* companion are kept 7 days after it confirmed them, then deleted by a daily cleanup job. A note sent only to some other companion, or anything while unpaired, is never deleted.
 
 ## Finding a server
 
@@ -94,6 +97,25 @@ PUT  /v1/notes/{id}        multipart/form-data: audio (the .aac), meta (the .jso
 ```
 
 `PUT` with the note's own id is idempotent — a retry after a dropped connection never creates a duplicate. Always `HEAD` first to skip re-sending.
+
+## App updates (over Wi-Fi from the companion)
+
+The companion hosts the latest Orbit release; the watch offers it and installs it only after the user taps **Install** and confirms Android's own dialog. Never silent.
+
+```
+GET /v1/app/latest   Authorization: Bearer <token>
+     → 200 { "version_code": 457890, "version_name": "0.1.0-abc1234", "sha256": "<hex>", "size": 2093120,
+             "published_at": "2026-11-15T10:00:00+07:00", "apk": "/v1/app/apk" }
+     → 404 nothing published
+GET /v1/app/apk      Authorization: Bearer <token>  → the APK (application/vnd.android.package-archive)
+```
+
+- **Versioning:** `versionCode` = minutes since 2026-01-01T00:00Z at build time (`app/build.gradle.kts`; override `-PorbitVersionCode=N`), `versionName` = `0.1.0-<short commit>`. Newer build (any branch) = higher code; "newer" on the watch means a strictly higher versionCode. The watch is not debuggable, so a lower versionCode is never installable over a higher one (not even `adb install -r -d`).
+- **When the watch checks** (no persistent connection; all over the Wi-Fi-bound client, home Wi-Fi + verified companion only): home Wi-Fi connects (20 s later, after uploads), after an upload batch, the Servers screen finding the companion, every 6 h (WorkManager, unmetered). Opportunistic checks run at most every 30 min; tapping the paired companion on the Servers screen, or opening the Update screen with nothing offered ("Check now"), checks at once.
+- **Offer:** a newer `version_code` is downloaded to `files/update/`, size + sha256 verified (mismatch → deleted, retried next check), then offered: an "Orbit update available" notification and an "Update available" row on the Servers screen (in place of the unpaired-scan row) — both open the **Update** screen (installed vs offered version, Install button).
+- **Install:** PackageInstaller session → Android's confirmation. First time, Android 8 needs "Install unknown apps" allowed for Orbit: the button turns into **Allow installs** and opens that switch (adb: `adb shell appops set com.orbit REQUEST_INSTALL_PACKAGES allow`).
+- **Never during a recording or a Talk turn:** Install is disabled while a `.rec` file was written in the last 60 s / the recorder marker is live, or Talk is listening, sending/waiting for a reply, or speaking (incl. a history replay). It is re-enabled when that ends.
+- **Data:** same package + same signing key (the debug keystore signs release builds) → files, prefs and the queue survive. After the update the launcher restarts as HOME and rebinds the notification listener as usual; a stale offer (≤ installed version) is dropped on start.
 
 ## Screens (see `design/VoiceRecord`, `VoiceInbox`, `VoiceServers`)
 

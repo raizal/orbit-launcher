@@ -103,5 +103,50 @@ def diary(day: Annotated[Optional[str], typer.Argument(help="Local date, YYYY-MM
     typer.echo(f"Wrote {page}")
 
 
+inbox_app = typer.Typer(no_args_is_help=True, help="Orbit Inbox: send short items to the watch (docs/inbox.md).")
+app.add_typer(inbox_app, name="inbox")
+
+
+@inbox_app.command("add")
+def inbox_add(title: Annotated[str, typer.Option(help="Short, spoken-friendly title")],
+              body: Annotated[str, typer.Option(help="One or two sentences")] = "",
+              kind: Annotated[str, typer.Option(help="note, thread_done, app_update, ...")] = "note",
+              ref: Annotated[Optional[str], typer.Option(help="Reference, e.g. a BB thread id")] = None,
+              config: ConfigOpt = None):
+    """Add an item; the watch picks it up on its next check (works with or without `serve` running)."""
+    from .inbox import Inbox, InvalidItem, NewItem
+
+    cfg = config_mod.load(config)
+    try:
+        item = Inbox(cfg.data_dir).add(NewItem(title=title, body=body, kind=kind, ref=ref))
+    except InvalidItem as e:
+        raise typer.BadParameter(str(e)) from None
+    typer.echo(json.dumps(item.public()))
+
+
+@inbox_app.command("list")
+def inbox_list(limit: int = typer.Option(20, help="How many, newest first"), config: ConfigOpt = None):
+    """Newest items with their read state."""
+    from .inbox import Inbox
+
+    cfg = config_mod.load(config)
+    for i in Inbox(cfg.data_dir).latest(limit):
+        typer.echo(f"{i.created_at[:16]}  {'  ' if i.read_at else '● '}{i.id}  [{i.kind}] {i.title}"
+                   + (f" — {i.body[:80]}" if i.body else ""))
+
+
+@inbox_app.command("read")
+def inbox_read(item_id: str, unread: bool = typer.Option(False, "--unread", help="Mark unread instead"),
+               config: ConfigOpt = None):
+    """Mark an item read (or unread)."""
+    from .inbox import Inbox
+
+    cfg = config_mod.load(config)
+    item = Inbox(cfg.data_dir).mark_read(item_id, read=not unread)
+    if not item:
+        raise typer.BadParameter(f"no inbox item {item_id}")
+    typer.echo(json.dumps(item.public()))
+
+
 def main() -> None:
     app()

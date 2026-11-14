@@ -42,6 +42,12 @@
             android:exported="false"
             android:theme="@style/Theme.Orbit.Voice" />
 
+        <!-- Orbit Inbox: what the companion sent (docs/inbox.md). -->
+        <activity
+            android:name=".inbox.InboxListActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Orbit.Voice" />
+
         <!-- Exported for adb pairing in debug builds (the extra is ignored in release). -->
         <activity
             android:name=".ServersActivity"

@@ -17,13 +17,14 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import traceback
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import actions, diary
+from . import actions, diary, inbox
 from .actions import ActionLog, Invalid, Pending, SettingsStore, TalkSettings, WorkspaceRefs
 from .config import Config
 from .store import Note, Store, write_atomic
@@ -239,6 +240,14 @@ class Talker:
         """Start reading the workspace while the note is still being transcribed."""
         if self.workspace:
             self.workspace.warm()
+        # Inbox producers (bb thread list/output) too, so the turn finds them fresh (docs/inbox.md).
+        threading.Thread(target=self._warm_inbox, name="inbox-warm", daemon=True).start()
+
+    def _warm_inbox(self) -> None:
+        try:
+            inbox.shared(self.cfg)[1].refresh()
+        except Exception as e:  # noqa: BLE001 - best effort
+            print(f"talk: inbox refresh failed: {e}")
 
     # --- prompts ---------------------------------------------------------------------------------
 
@@ -260,7 +269,7 @@ class Talker:
         return "\n".join(parts)
 
     def turn_prompt(self, note: Note, transcript: str, settings: TalkSettings, pending: Pending | None,
-                    expired: Pending | None, index_text: str) -> str:
+                    expired: Pending | None, index_text: str, inbox_text: str = "") -> str:
         """Sent with EVERY turn, so settings and rules are never stale in a resumed session."""
         parts = [RULES, "", PARAMS_HELP, "",
                  "Available voices: " + "; ".join(f"{k} ({v})" for k, v in actions.VOICES.items()), "",
@@ -287,7 +296,10 @@ class Talker:
                 f"{e['at'][11:16]} UTC {e['event']} {e.get('kind', '')}: {e.get('summary', '')}"
                 + (f" -> {e['result_text']}" if e.get("result_text") else "")
                 + (f" -> error {e['error']}" if e.get("error") else "") for e in recent))
-        parts += ["", index_text, "", f"VOICE NOTE ({note.started:%H:%M}):", transcript, "",
+        parts += ["", index_text, ""]
+        if inbox_text:
+            parts += [inbox_text, ""]
+        parts += [f"VOICE NOTE ({note.started:%H:%M}):", transcript, "",
                   "Answer with the JSON object only."]
         return "\n".join(parts)
 
@@ -383,8 +395,9 @@ class Talker:
             index_text = (f"BB WORKSPACE: unchanged since the snapshot taken {idx.taken_at:%H:%M} "
                           "(shown earlier in this conversation).")
 
+        inbox_text, mentioned = self.inbox_context(note)
         t = time.monotonic()
-        prompt = self.turn_prompt(note, transcript, settings, pending, expired, index_text)
+        prompt = self.turn_prompt(note, transcript, settings, pending, expired, index_text, inbox_text)
         answer, session = self.ask(prompt, session, conversation, lambda: self.context_prompt(note))
         timings["codex"] = time.monotonic() - t
         if idx and session:
@@ -407,7 +420,23 @@ class Talker:
             timings["codex2"] = time.monotonic() - t
 
         text = self.handle_actions(note, answer, pending, expired, idx)
+        if mentioned:
+            inbox.shared(self.cfg)[0].mark_mentioned(mentioned)  # offered once; never brought up again
         return text, timings
+
+    def inbox_context(self, note: Note) -> tuple[str, list[str]]:
+        """docs/inbox.md → Talk: the inbox item he opened before talking (sidecar `about`) with its thread's
+        latest output, and unread items Codex may mention once. Never fails the turn."""
+        try:
+            box, producers = inbox.shared(self.cfg)
+            producers.refresh()
+            about = inbox.note_about(self.store.audio_path(note).with_suffix(".json"))
+            output = (lambda tid: (self.workspace.run(["thread", "output", tid]) or {}).get("output")) \
+                if self.workspace else None
+            return inbox.talk_context(box, about, output)
+        except Exception as e:  # noqa: BLE001
+            print(f"talk: inbox context failed: {e}")
+            return "", []
 
     def handle_actions(self, note: Note, answer: dict, pending: Pending | None, expired: Pending | None, idx) -> str:
         reply = spoken(answer.get("reply") or "")

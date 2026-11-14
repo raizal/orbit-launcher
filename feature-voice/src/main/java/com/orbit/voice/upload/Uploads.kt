@@ -19,6 +19,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.orbit.voice.NoteStore
+import com.orbit.voice.inbox.InboxSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -105,6 +106,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             ?: return@withContext Result.retry().also { Log.i(TAG, "server not found") }
 
         var transient = false
+        var sent = 0
         for (note in pending) {
             val meta = note.meta
             val metaFile = File(NoteStore(applicationContext).dir, note.stem + ".json")
@@ -129,6 +131,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 // checking the audio against meta.sha256 — so it is safely there.
                 prefs.lastIp = ip
                 queue.markSent(note.stem)
+                sent++
                 Log.i(TAG, "sent ${note.stem}")
             } catch (e: OrbitClient.HttpError) {
                 val msg = when (e.code) {
@@ -148,6 +151,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 Progress.changed()
             }
         }
+        if (sent > 0) InboxSync.kick(applicationContext) // a cheap moment: we just reached the companion
         if (transient) Result.retry() else Result.success()
     }
 

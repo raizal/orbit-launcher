@@ -16,6 +16,7 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -27,6 +28,9 @@ import com.orbit.voice.RecorderState
 import com.orbit.voice.RecorderUi
 import com.orbit.voice.TICKS
 import com.orbit.voice.VoiceEntry
+import com.orbit.voice.inbox.InboxItem
+import com.orbit.voice.inbox.InboxListActivity
+import com.orbit.voice.inbox.InboxSync
 import com.orbit.voice.upload.Discovery
 import com.orbit.voice.upload.NoteState
 import com.orbit.voice.upload.OrbitClient
@@ -73,6 +77,9 @@ class TalkActivity : ComponentActivity() {
     /** Stem whose reply is playing from the history (▶ → ■). */
     private var playingStem by mutableStateOf<String?>(null)
     private var refreshJob: Job? = null
+    /** Inbox item the next turn is about (docs/inbox.md); sent as the sidecar's `about`. */
+    private var about by mutableStateOf<InboxItem?>(null)
+    private var inboxPoll: Job? = null
     private var replayJob: Job? = null
     private val audioLock = Mutex()
     private var startWhenPermitted = false
@@ -128,7 +135,10 @@ class TalkActivity : ComponentActivity() {
         // ≤ 50 small JSON files: read them now so the conversation is there on the first frame.
         history = cache.load()
         ContextCompat.registerReceiver(this, receiver, IntentFilter(RecorderState.ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
+        InboxSync.load(this)
+        openAbout(intent)
         setContent {
+            val inbox by InboxSync.state.collectAsState()
             RoundScreen {
                 TalkScreen(
                     state = ui,
@@ -157,13 +167,47 @@ class TalkActivity : ComponentActivity() {
                         dispatch(TalkEvent.Reset)
                         mutate { TalkHistory.startNew() }
                     },
+                    inbox = TalkInbox(
+                        about = about,
+                        unread = inbox.unreadCount,
+                        onOpen = { startActivity(Intent(this, InboxListActivity::class.java)) },
+                        onClearAbout = { about = null },
+                    ),
                 )
             }
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openAbout(intent)
+    }
+
+    /**
+     * Opened from an inbox item (notification or the Inbox list): it becomes read and the next
+     * turn is about it. A turn in progress is left alone; the item applies to the next one.
+     */
+    private fun openAbout(intent: Intent?) {
+        val id = intent?.getStringExtra(EXTRA_ABOUT) ?: return
+        intent.removeExtra(EXTRA_ABOUT) // once, not again on recreate
+        lifecycleScope.launch {
+            InboxSync.state.value.item(id)?.let { about = it } // show it at once…
+            val item = InboxSync.markRead(this@TalkActivity, id) ?: InboxSync.state.value.item(id)
+            if (item != null) about = item // …with the read state the companion now has
+            if (ui is TalkUi.Done || ui is TalkUi.Failed || ui is TalkUi.Later) dispatch(TalkEvent.Reset)
+        }
+    }
+
     override fun onStart() {
         super.onStart()
+        // While Talk is open the inbox is checked every ~10 s (docs/inbox.md).
+        inboxPoll = lifecycleScope.launch {
+            while (true) {
+                InboxSync.sync(this@TalkActivity)
+                delay(INBOX_POLL_MS)
+            }
+        }
         serverName = ServerPrefs(this).pairing?.name
         // A recording already running (e.g. reopened mid-turn): show it as listening.
         RecorderState.readMarker(this)?.let {
@@ -176,6 +220,7 @@ class TalkActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        inboxPoll?.cancel()
         handler.removeCallbacks(watchdog)
         refreshJob?.cancel()
         super.onStop()
@@ -212,7 +257,10 @@ class TalkActivity : ComponentActivity() {
         turn?.cancel()
         stopPlayback()
         stopRequested = false
-        val pressedAt = VoiceEntry.startRecording(this, MODE_TALK, if (history.file.nextIsNew) CONVERSATION_NEW else null)
+        val pressedAt = VoiceEntry.startRecording(
+            this, MODE_TALK, if (history.file.nextIsNew) CONVERSATION_NEW else null, about = about?.id,
+        )
+        about = null // only this turn carries it; the conversation remembers the rest
         recFile = store.stampFor(pressedAt) + NoteStore.AUDIO_EXT
         levels = FloatArray(TICKS)
         lastTick = SystemClock.elapsedRealtime()
@@ -498,6 +546,12 @@ class TalkActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_TALK = "com.orbit.action.TALK"
+        /** Inbox item id to talk about (docs/inbox.md). */
+        const val EXTRA_ABOUT = "com.orbit.extra.INBOX_ITEM"
+        private const val INBOX_POLL_MS = 10_000L
+
+        fun aboutIntent(context: Context, itemId: String): Intent =
+            Intent(context, TalkActivity::class.java).putExtra(EXTRA_ABOUT, itemId).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         private const val TAG = "OrbitTalk"
         private const val REQ_MIC = 2
         private const val IDLE_GIVE_UP_MS = 30_000L

@@ -77,6 +77,9 @@ midnight too. Diary grouping is unchanged (by the note's local date).
 - `"conversation": "new"` (optional) on the first turn after the user tapped **New** — the companion
   starts a new conversation (new Codex session) with this turn. Absent → continue the latest one.
 
+- `"about": "in-…"` (optional): the Orbit Inbox item the user opened before this turn — the companion
+  puts the item and its thread's latest output into the turn's prompt (docs/inbox.md → Talk).
+
 ### API (bearer)
 ```
 GET /v1/talk/history?limit=20

@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { api, fmtDay, fmtDuration, todayIso } from './api.js'
+  import { api, fmtDay, fmtDuration, fmtTime, todayIso } from './api.js'
   import { renderDiary } from './markdown.js'
 
   let status = $state(null)
@@ -11,6 +11,8 @@
   let building = $state(false)
   let showPair = $state(false)
   let showSource = $state(false)
+  let talk = $state(null) // { workspace, pending, audit, settings, voices }
+  let showTalk = $state(false)
   const page = $derived(diary?.markdown ? renderDiary(diary.markdown) : null)
   let error = $state('')
 
@@ -26,7 +28,7 @@
   }
 
   async function loadOverview() {
-    ;[status, days] = await Promise.all([api.status(), api.days()])
+    ;[status, days, talk] = await Promise.all([api.status(), api.days(), api.talk()])
     if (!day) day = days[0]?.date ?? todayIso()
   }
 
@@ -75,7 +77,7 @@
   })
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && (showPair = false)} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showTalk = false))} />
 
 <header>
   <div class="brand">
@@ -93,6 +95,9 @@
       {#if !status.worker}<span class="warn">transcription worker off</span>{/if}
     </div>
   {/if}
+  <button onclick={() => (showTalk = true)}>
+    Talk assistant{#if talk?.pending && !talk.pending.expired}<span class="pending-dot" title="An action waits for confirmation"></span>{/if}
+  </button>
   <button onclick={() => (showPair = true)}>Pair watch</button>
 </header>
 
@@ -190,6 +195,58 @@
   </div>
 {/if}
 
+{#if showTalk && talk}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal" role="presentation" onclick={(e) => e.target === e.currentTarget && (showTalk = false)}>
+    <div class="card talk-card" role="dialog" aria-modal="true" aria-label="Talk assistant">
+      <h2>Talk assistant</h2>
+      <p class="muted">BB workspace: {talk.workspace === 'bb' ? 'connected (read on demand, actions need your spoken yes)' : 'off'}</p>
+
+      <h3>Waiting for confirmation</h3>
+      {#if talk.pending}
+        <div class="pending" class:expired={talk.pending.expired}>
+          <div><span class="badge">{talk.pending.kind}</span> {talk.pending.summary}</div>
+          <pre>{JSON.stringify(talk.pending.params, null, 1)}</pre>
+          <p class="muted small-print">
+            Proposed {fmtTime(talk.pending.created_at)} ·
+            {talk.pending.expired ? 'expired' : `expires ${fmtTime(talk.pending.expires_at)}`}.
+            Confirm or cancel by voice on the watch (“yes” / “no”) — not from here.
+          </p>
+        </div>
+      {:else}
+        <p class="muted">Nothing pending.</p>
+      {/if}
+
+      <h3>Voice &amp; personality</h3>
+      <dl class="meta">
+        <dt>Voice</dt><dd>{talk.settings.voice} <span class="muted">{talk.voices[talk.settings.voice] ?? ''}</span></dd>
+        <dt>Speaking rate</dt><dd>{talk.settings.length_scale.toFixed(2)} <span class="muted">(Piper length scale; higher = slower)</span></dd>
+        <dt>Reply length</dt><dd>{talk.settings.reply_length}</dd>
+        <dt>Personality</dt><dd>{talk.settings.personality || '— (base persona)'}</dd>
+        {#if talk.settings.updated_at}<dt>Changed</dt><dd>{fmtTime(talk.settings.updated_at)}</dd>{/if}
+      </dl>
+      <p class="muted small-print">Change these by asking on the watch, e.g. “speak a bit slower”.</p>
+
+      <h3>Action log</h3>
+      {#if talk.audit.length === 0}<p class="muted">No actions yet.</p>{/if}
+      <ul class="audit">
+        {#each talk.audit as e}
+          <li>
+            <span class="num muted">{fmtTime(e.at)}</span>
+            <span class="badge ev-{e.event}">{e.event}</span>
+            <span>{e.kind ?? ''}</span>
+            <span>{e.summary ?? ''}</span>
+            {#if e.result_text}<div class="muted">{e.result_text}</div>{/if}
+            {#if e.error}<div class="err">{e.error}</div>{/if}
+            {#if e.argv}<code>{e.argv.join(' ')}</code>{/if}
+          </li>
+        {/each}
+      </ul>
+      <button onclick={() => (showTalk = false)}>Close</button>
+    </div>
+  </div>
+{/if}
+
 <style>
   header {
     display: flex; align-items: center; gap: 24px; padding: 16px 28px;
@@ -260,6 +317,20 @@
   .card { background: var(--surface); border-radius: 18px; padding: 24px; max-width: 360px; text-align: center; }
   .card img { width: 260px; height: 260px; border-radius: 12px; background: #fff; margin: 8px 0; }
   .small-print { font-size: 12px; }
+  .pending-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rec); margin-left: 8px; vertical-align: middle; }
+  .talk-card { max-width: 640px; width: 92vw; max-height: 86vh; overflow: auto; text-align: left; }
+  .talk-card h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin: 18px 0 8px; }
+  .pending { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; }
+  .pending.expired { border-color: var(--line); opacity: 0.6; }
+  .pending pre { margin: 8px 0; font-size: 12px; }
+  .audit { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .audit li { border-bottom: 1px solid var(--line); padding-bottom: 6px; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .audit li div, .audit li code { flex-basis: 100%; }
+  .audit code { font-size: 11.5px; word-break: break-all; }
+  .audit .err { color: var(--rec); }
+  .badge.ev-executed { color: var(--ok); }
+  .badge.ev-failed, .badge.ev-rejected { color: var(--rec); }
+  .badge.ev-proposed, .badge.ev-confirmed { color: var(--info); }
 
   @media (max-width: 1000px) {
     main { grid-template-columns: 1fr; }

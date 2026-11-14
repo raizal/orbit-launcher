@@ -11,6 +11,7 @@ async function call(path, options) {
 
 export const api = {
   status: () => call('/status'),
+  talk: () => call('/talk'),
   days: () => call('/days'),
   notes: (day) => call(`/notes?day=${day}`),
   retranscribe: (id) => call(`/notes/${id}/transcribe`, { method: 'POST' }),
@@ -30,6 +31,12 @@ export function fmtDuration(ms) {
 export function fmtDay(iso) {
   const d = new Date(`${iso}T12:00:00`)
   return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+export function fmtTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
 export function todayIso() {

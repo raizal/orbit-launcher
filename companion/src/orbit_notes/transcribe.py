@@ -94,6 +94,8 @@ class Worker:
             if not note:
                 continue
             talk = note.is_talk and self.talker is not None and note.talk_status in TALK_ACTIVE
+            if talk and hasattr(self.talker, "warm"):
+                self.talker.warm()  # read the BB workspace while whisper runs
             if note.transcript_status != "done":
                 if talk:
                     self.store.set_talk_status(note.id, "transcribing")

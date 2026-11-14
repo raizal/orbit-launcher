@@ -23,7 +23,8 @@ def cfg(tmp_path, monkeypatch):
     for k in ("ORBIT_TOKEN", "ORBIT_DATA_DIR", "ORBIT_VAULT_DIR", "ORBIT_LLM_PROVIDER", "ORBIT_NAME"):
         monkeypatch.delenv(k, raising=False)
     path = tmp_path / "config.toml"
-    path.write_text(f'name = "home-pc"\ntoken = "{TOKEN}"\ndata_dir = "data"\n')
+    # talk_workspace = "none": tests never reach a real `bb`; workspace tests use a fake one (test_workspace.py).
+    path.write_text(f'name = "home-pc"\ntoken = "{TOKEN}"\ndata_dir = "data"\ntalk_workspace = "none"\n')
     return config_mod.load(path)
 
 
@@ -435,9 +436,11 @@ def fake_codex(tmp_path, monkeypatch):
     return lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-def fake_tts(spoken):
-    def tts(text, out):
+def fake_tts(spoken, calls=None):
+    def tts(text, out, voice=None, length_scale=None):
         spoken.append(text)
+        if calls is not None:
+            calls.append({"text": text, "voice": voice, "length_scale": length_scale})
         out.write_bytes(b"RIFF fake wav")
     return tts
 
@@ -532,13 +535,14 @@ def test_talk_one_codex_session_per_day(client, store, cfg, fake_codex):
     assert a[a.index("-s") + 1] == "read-only" and "model_reasoning_effort=low" in a
     assert a[a.index("-C") + 1] == str(cfg.data_dir / "talk") and calls[0]["cwd"] == str(cfg.data_dir / "talk")
     p = calls[0]["prompt"]
-    assert "journaling companion" in p and "I planted tomatoes." in p and "raw stuff" not in p
+    assert "You are Orbit" in p and "I planted tomatoes." in p and "raw stuff" not in p
     assert "[06:30] Woke up early, coffee." in p and "Feeling a bit tired today" in p
 
     b = calls[1]["args"]
     assert b[:3] == ["exec", "resume", "--json"] and b[-2:] == ["sess-0", "-"]
     assert 'sandbox_mode="read-only"' in b and "--ignore-user-config" in b
-    assert "The day went better than expected" in calls[1]["prompt"] and "journaling companion" not in calls[1]["prompt"]
+    assert "The day went better than expected" in calls[1]["prompt"] and "You are Orbit" not in calls[1]["prompt"]
+    assert "CURRENT TALK SETTINGS" in calls[1]["prompt"]  # settings + rules go with every turn
 
     c = calls[2]["args"]
     assert "resume" not in c  # a new local date starts a new session

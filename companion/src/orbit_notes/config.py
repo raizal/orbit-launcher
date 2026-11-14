@@ -31,6 +31,7 @@ codex_model = ""                         # for "codex"; empty = Codex default
 talk_provider = "codex"                  # "codex" (your `codex` CLI login) or "none"
 tts_voice = "en_US-lessac-medium"        # Piper voice, downloaded once into <data_dir>/voices/
 talk_timeout_s = 120
+talk_workspace = "bb"                    # "bb": Talk can read your BB workspace and propose actions (confirmed by voice); "none"
 """
 
 
@@ -55,6 +56,7 @@ class Config:
     talk_provider: str = "codex"
     tts_voice: str = "en_US-lessac-medium"
     talk_timeout_s: int = 120
+    talk_workspace: str = "bb"
 
     @property
     def diary_dir(self) -> Path:

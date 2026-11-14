@@ -144,11 +144,15 @@ fake `codex` on PATH).
 2. Codex answers with:
    ```json
    {"reply": "…",
-    "need_details": {"threads": ["thr_…"], "tasks": ["ABC-12"], "memory": [{"query": "…", "project": ""}], "projects": ["orbit-launcher"]},
+    "need_details": {"threads": ["thr_…"], "tasks": ["ABC-12"], "memory": [{"query": "…", "project": ""}], "projects": ["orbit-launcher"],
+                     "recall": [{"query": "…", "from": "YYYY-MM-DD|", "to": "YYYY-MM-DD|"}]},
     "confirmation": "confirm | cancel | none",
-    "proposed_action": {"kind": "none | thread_spawn | thread_tell | task_create | task_update | task_comment | memory_add | settings",
-                        "summary": "…", "params_json": "{…}"}}
+    "proposed_action": {"kind": "none | thread_spawn | thread_tell | task_create | task_update | task_comment | memory_add | settings | diary_reflection | memory_fact | memory_forget",
+                        "summary": "…", "params_json": "{…}"},
+    "memory": {"facts": [{"text", "topic", "kind", "confidence", "relation", "fact_id"}], "tags": [{"kind", "name"}]}}
    ```
+   `need_details.recall`, `memory` and the `memory_fact` / `memory_forget` kinds: docs/memory.md (Orbit's own
+   memory of Raiz — not the same as `memory_add` / `need_details.memory`, which are BB workspace memories).
 3. **One detail round** at most: if `need_details` is non-empty the companion fetches it (≤ 4 threads →
    `thread log --limit=2`; ≤ 4 tasks → `tasks show` incl. subtasks, agent threads, last comments; ≤ 3
    memory searches, across every project unless one is named; ≤ 2 projects → `git log --all` + branch +

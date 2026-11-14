@@ -155,6 +155,8 @@ PARAMS = {
     "memory_add": ({"scope", "name", "summary", "details", "reason"}, {"project", "kind"}),
     "settings": (set(), {"voice", "length_scale", "personality", "reply_length"}),
     "diary_reflection": ({"text"}, set()),  # local: the day is set by the companion (insights.reflection_day)
+    "memory_fact": ({"op", "fact_id"}, {"text", "topic", "kind"}),  # local: memory.py (docs/memory.md)
+    "memory_forget": ({"query"}, set()),
 }
 REFLECTION_MIN, REFLECTION_MAX = 20, 2000
 KINDS = tuple(PARAMS)
@@ -270,6 +272,10 @@ def validate(kind: str, params: dict, refs: WorkspaceRefs) -> dict:
             out["kind"] = k
     elif kind == "settings":
         out = validate_settings(params)
+    elif kind in ("memory_fact", "memory_forget"):
+        from .memory import validate_action  # late: memory imports this module
+
+        out = validate_action(kind, params)
     elif kind == "diary_reflection":
         text = _text(params, "text", REFLECTION_MAX)
         if len(text) < REFLECTION_MIN:

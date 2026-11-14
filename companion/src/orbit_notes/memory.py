@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from .actions import Invalid
 from .store import Note, Store, write_atomic
 
 # --- embedding model -------------------------------------------------------------------------------
@@ -381,10 +382,6 @@ class Fact:
     def json(self) -> dict:
         return {k: getattr(self, k) for k in ("id", "text", "topic", "kind", "sources", "first_seen",
                                                "last_confirmed", "confidence", "status", "history", "updated_at")}
-
-
-class Invalid(ValueError):
-    """Bad memory action / edit; the message is spoken or shown to the owner."""
 
 
 # --- the store -------------------------------------------------------------------------------------
@@ -1056,7 +1053,7 @@ class Memory:
         return bool(n)
 
     def forget_preview(self, term: str) -> tuple[list[Fact], int]:
-        pat = term_re(term)
+        pat = term_re(clean_term(term))
         facts = [f for f in self.facts() if pat.search(normalize(f"{f.topic} {f.text}"))]
         with closing(self._db()) as db:
             n = sum(1 for r in db.execute("SELECT text FROM chunks WHERE excluded = 0") if pat.search(normalize(r["text"])))
@@ -1239,8 +1236,7 @@ def safe_evidence(fn, title: str = "MEMORY") -> str:
         return f"{title}: could not be searched right now ({e}). You have no memory evidence this turn."
 
 
-ACTION_KINDS = ("memory_fact", "memory_forget")
-ACTION_PARAMS = {"memory_fact": ({"op", "fact_id"}, {"text", "topic", "kind"}), "memory_forget": ({"query"}, set())}
+ACTION_KINDS = ("memory_fact", "memory_forget")  # params allowlist: actions.PARAMS
 
 
 def validate_action(kind: str, params: dict) -> dict:

@@ -464,7 +464,7 @@ def test_validate_needs_workspace_for_references():
         validate("thread_spawn", {"project": "orbit-launcher", "prompt": "x"}, WorkspaceRefs(ok=False))
     assert validate("settings", {"personality": ""}, WorkspaceRefs(ok=False)) == {"personality": ""}
     assert set(actions.KINDS) == {"thread_spawn", "thread_tell", "task_create", "task_update", "task_comment",
-                                  "memory_add", "settings", "diary_reflection"}
+                                  "memory_add", "settings", "diary_reflection", "memory_fact", "memory_forget"}
 
 
 # --- web UI ----------------------------------------------------------------------------------------

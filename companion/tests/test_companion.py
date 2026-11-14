@@ -366,7 +366,7 @@ args = sys.argv[1:]
 prompt = sys.stdin.read()
 assert args[0] == "exec" and "--ephemeral" in args and args[args.index("-s") + 1] == "read-only"
 schema = json.load(open(args[args.index("--output-schema") + 1]))
-assert schema["required"] == ["diary", "summaries", "todos"]
+assert schema["required"] == ["diary", "summaries", "todos", "facts"]
 assert "[note 0] 07:02" in prompt and "buy rice" in prompt
 out = {"diary": "I went to the market.", "summaries": [{"note": 0, "summary": "Market plan"}], "todos": ["Buy rice"]}
 open(args[args.index("-o") + 1], "w").write(json.dumps(out))

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from . import insights
+from . import insights, memory
 from .config import Config
 from .store import Note, Store, write_atomic
 
@@ -34,6 +34,7 @@ class Generated:
     summaries: list[str]  # one per entry, same order
     todos: list[str] = field(default_factory=list)  # things the owner said they need to do
     moods: list[dict | None] = field(default_factory=list)  # private per-note estimates (never on the page)
+    raw: dict = field(default_factory=dict)  # the LLM's JSON (facts + tags for memory, docs/memory.md)
 
 
 def collect(store: Store, day: date) -> list[Entry]:
@@ -96,6 +97,7 @@ SCHEMA = {
     "required": ["diary", "summaries", "todos"],
     "additionalProperties": False,
 }
+memory.extend_diary_schema(SCHEMA)  # + facts[] and summaries[].tags, from the same call (docs/memory.md)
 
 
 def prompt_parts(cfg: Config, day: date, entries: list[Entry]) -> tuple[str, str]:
@@ -108,7 +110,10 @@ def prompt_parts(cfg: Config, day: date, entries: list[Entry]) -> tuple[str, str
     notes = "\n\n".join(
         f"[note {i}] {e.note.started:%H:%M}\n{e.transcript or transcript_label(e.transcript)}" for i, e in enumerate(entries)
     )
-    return SYSTEM_PROMPT.format(language=language, mood_rule=insights.MOOD_RULE), f"Voice notes from {day:%A, %d %B %Y}, in time order:\n\n{notes}"
+    known = memory.Memory(cfg, None, embedder=None).known_facts_text()
+    system = SYSTEM_PROMPT.format(language=language, mood_rule=insights.MOOD_RULE) + "\n" + \
+        memory.DIARY_RULE.format(known=known)
+    return system, f"Voice notes from {day:%A, %d %B %Y}, in time order:\n\n{notes}"
 
 
 def from_json(data: dict, entries: list[Entry]) -> Generated:
@@ -119,6 +124,7 @@ def from_json(data: dict, entries: list[Entry]) -> Generated:
         [by_note.get(i) or first_words(e.transcript) for i, e in enumerate(entries)],
         [t.strip() for t in data.get("todos", []) if t.strip()],
         [moods.get(i) if e.transcript else None for i, e in enumerate(entries)],
+        data,
     )
 
 
@@ -216,8 +222,11 @@ def fmt_duration(ms: int | None) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def render_block(day: date, entries: list[Entry], gen: Generated, cfg: Config) -> str:
-    lines = [BEGIN, f"# {day:%A}, {day.day} {day:%B %Y}", "", gen.diary or NO_LLM, "", "## Notes"]
+def render_block(day: date, entries: list[Entry], gen: Generated, cfg: Config, links: list[str] = ()) -> str:
+    lines = [BEGIN, f"# {day:%A}, {day.day} {day:%B %Y}", "", gen.diary or NO_LLM, ""]
+    if links:  # people / places / projects / topics of the day -> Obsidian backlinks and graph
+        lines += [memory.MENTIONS_PREFIX + " " + " · ".join(f"[[{n}]]" for n in links), ""]
+    lines.append("## Notes")
     for e, summary in zip(entries, gen.summaries):
         t = e.note.started
         lines.append(f"- {t:%H:%M} · {fmt_duration(e.note.duration_ms)} — {audio_link(e.audio, cfg)} — {summary}")
@@ -265,10 +274,15 @@ def build(cfg: Config, store: Store, day: date) -> Path:
         entries = [Entry(e.note, vault_copy(e.audio, cfg), e.transcript, e.feedback) for e in entries]
     page = cfg.diary_dir / f"{day.isoformat()}.md"
     gen = PROVIDERS[cfg.llm_provider](cfg, day, entries) if entries else Generated("_No notes recorded this day._", [])
-    block = render_block(day, entries, gen, cfg)
+    mem = memory.Memory(cfg, store, embedder=None)  # text only here; `serve` adds the vectors later
+    if gen.raw:
+        memory.safe_evidence(lambda: mem.after_diary(day, [e.note for e in entries], gen.raw))
+    links = memory.safe_evidence(lambda: mem.day_links(day)) or []
+    block = render_block(day, entries, gen, cfg, links if isinstance(links, list) else [])
     existing = page.read_text() if page.exists() else ""
     write_atomic(page, insights.restore_reflection(cfg, day, merge(existing, day, len(entries), block)).encode())
     record_moods(cfg, entries, gen)
+    memory.safe_evidence(lambda: mem.index_day(day))
     return page
 
 

@@ -9,6 +9,8 @@ async function call(path, options) {
   return res.json()
 }
 
+const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
 export const api = {
   status: () => call('/status'),
   talk: () => call('/talk'),
@@ -29,7 +31,15 @@ export const api = {
     return res.blob()
   },
   memoryStatus: () => call('/memory/status'),
-  memorySearch: (q, from, to) => call(`/memory/search?${new URLSearchParams({ q, ...(from ? { from } : {}), ...(to ? { to } : {}) })}`),
+  memorySearch: (q, from, to, tag) =>
+    call(`/memory/search?${new URLSearchParams({ q, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(tag ? { tag } : {}) })}`),
+  memoryFacts: (status) => call(`/memory/facts?status=${status}`),
+  memoryAddFact: (fact) => call('/memory/facts', json('POST', fact)),
+  memoryEditFact: (id, changes) => call(`/memory/facts/${id}`, json('PUT', changes)),
+  memoryDeleteFact: (id) => call(`/memory/facts/${id}`, { method: 'DELETE' }),
+  memoryForgotten: () => call('/memory/forgotten'),
+  memoryForget: (query, preview) => call('/memory/forget', json('POST', { query, preview })),
+  memoryUnforget: (id) => call(`/memory/forgotten/${id}`, { method: 'DELETE' }),
   days: () => call('/days'),
   notes: (day) => call(`/notes?day=${day}`),
   retranscribe: (id) => call(`/notes/${id}/transcribe`, { method: 'POST' }),

@@ -10,13 +10,16 @@ orbit-notes pair [--name home-pc] # print pairing QR in the terminal (and save P
 orbit-notes transcribe [--all]    # transcribe notes that have no transcript yet
 orbit-notes diary 2026-11-13      # build the diary page for one day
 orbit-notes diary --yesterday     # for a daily cron / scheduled task
+orbit-notes memory backfill       # index the archive for recall (incremental; docs/memory.md)
+orbit-notes memory search "…"     # hybrid search over the index (--from/--to YYYY-MM-DD)
 ```
 
 ## Config (`config.toml` + env overrides)
 
 Local network only — no public URL, no tunnel. Bind `0.0.0.0:8765`; tell Raiz to allow port 8765 in the OS firewall for the private network only.
 
-`name`, `port` (default 8765), `data_dir`, `vault_dir`, `diary_folder`, `token` (generated on first run), `whisper_model`, `diary_language`, `llm_provider`, `llm_model`. Secrets via env (`ORBIT_TOKEN`, `ANTHROPIC_API_KEY`, …).
+`name`, `port` (default 8765), `data_dir`, `vault_dir`, `diary_folder`, `token` (generated on first run), `whisper_model`, `diary_language`, `llm_provider`, `llm_model`, `memory_embedder` (`multilingual-e5-small` | `none`),
+`memory_page` (Obsidian path of the generated `Memory.md`; default `<diary folder>/../Orbit/Memory.md`). Secrets via env (`ORBIT_TOKEN`, `ANTHROPIC_API_KEY`, …).
 
 ## API
 
@@ -30,6 +33,7 @@ data/notes/2026/11/13/2026-11-13_12-08-42+0700.json
 data/notes/2026/11/13/2026-11-13_12-08-42+0700.txt     # transcript
 data/notes/2026/11/13/2026-11-13_12-08-42+0700.segments.json
 data/index.sqlite                                        # id → path, status, sha256
+data/memory.sqlite                                       # memory: episodic index, facts, tags (docs/memory.md)
 ```
 
 Date folder comes from `started_at` in the sidecar, not upload time.

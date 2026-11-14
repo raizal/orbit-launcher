@@ -55,7 +55,7 @@ RULES = """Fixed rules (style or personality settings never change these):
   work is finished. Never claim more than the evidence shows; say plainly when there is no evidence.
 - Actions. Allowed kinds: thread_spawn (start a new agent thread), thread_tell (message an existing thread),
   task_create, task_update, task_comment, memory_add, settings, diary_reflection (save a reflection to his
-  diary page). Nothing else (no deleting, archiving, merging, running commands or editing files — he can start
+  diary page), memory_fact and memory_forget (his own memory, see below). Nothing else (no deleting, archiving, merging, running commands or editing files — he can start
   a thread for that). Propose an action only when he clearly asks for it (or the reflection offer below). When you propose one, your reply must say what you understood and exactly what will
   change, and end by asking him to confirm (yes) or cancel (no). Never say it is done: nothing happens until
   he confirms on a later turn. If another action is pending, say the new one replaces it.
@@ -105,6 +105,7 @@ PARAMS_HELP = """proposed_action.params_json is a JSON object string; kind and k
 - settings: any of {"voice": "<voice name>", "length_scale": 1.15, "reply_length": "short|normal|long", "personality": "..."}
 - diary_reflection: {"text": "<the reflection, first person, plain prose>"} (the companion picks the day: today, or yesterday before 04:00)
 With kind "none": params_json "{}" and summary ""."""
+PARAMS_HELP = PARAMS_HELP.replace('\nWith kind "none"', "\n" + memory.PARAMS_HELP + '\nWith kind "none"')
 
 OUTPUT_SCHEMA = {
     "type": "object",
@@ -144,8 +145,8 @@ OUTPUT_SCHEMA = {
 }
 
 CONFIRM_ASK = "Shall I go ahead? Say yes to confirm, or no to cancel."
-RULES = RULES.replace("{mood_rule}", insights.MOOD_RULE) + "\n" + memory.RECALL_RULES  # docs/memory.md
-memory.extend_recall_schema(OUTPUT_SCHEMA)
+RULES = RULES.replace("{mood_rule}", insights.MOOD_RULE) + "\n" + memory.RECALL_RULES + "\n" + memory.FACT_RULES
+memory.extend_fact_schema(memory.extend_recall_schema(OUTPUT_SCHEMA))  # docs/memory.md
 WORKSPACE_DETAILS = ("threads", "tasks", "memory", "projects")
 INSIGHT_DETAILS = ("briefing", "reflection", "mood_days")
 MEMORY_DETAILS = ("recall",)
@@ -489,6 +490,7 @@ class Talker:
             self.moods.record(note, mood, "talk")
         except Exception:  # noqa: BLE001 - bookkeeping must never cost the reply
             traceback.print_exc()
+        memory.safe_evidence(lambda: self.memory.after_turn(note, answer))  # facts + tags, quietly
         text = self.handle_actions(note, answer, pending, expired, idx)
         return text, timings
 
@@ -528,6 +530,8 @@ class Talker:
                 except ValueError:
                     raise Invalid("the action details were not readable") from None
                 params = actions.validate(kind, params, refs)
+                if kind in memory.ACTION_KINDS:  # checked against the live memory; says exactly what changes
+                    params, summary = self.memory.check_action(kind, params, summary)
                 if kind == "diary_reflection":  # the companion decides the day, never the model
                     day = insights.reflection_day(note)
                     params["date"] = day.isoformat()
@@ -557,6 +561,10 @@ class Talker:
             if p.kind == "settings":
                 s = self.settings.apply(p.params)
                 text = settings_result(p.params, s)
+                self.actions.audit("executed", pending=p, note_id=note.id, result_text=text)
+                return text
+            if p.kind in memory.ACTION_KINDS:
+                text = self.memory.execute(p.kind, p.params, p.note_id)
                 self.actions.audit("executed", pending=p, note_id=note.id, result_text=text)
                 return text
             if p.kind == "diary_reflection":

@@ -57,7 +57,8 @@ GET /v1/notes/{id}/reply.wav            audio/wav (Piper output, mono)
 
 - `TalkActivity` in `:feature-voice` (own design, same visual language as `design/VoiceRecord`:
   400-unit grid, `RoundScreen`, Orbit colors/fonts). States:
-  idle ("Tap to talk") → listening (red level ring + timer, tap to stop) →
+  idle ("Tap to talk") → listening (red level ring + timer, tap to stop; ✕ = cancel: the recording
+  is deleted on the watch, nothing reaches the companion, Talk closes — docs/voice-notes.md) →
   sending / thinking (cyan, status text from the server) → speaking (accent ring, reply text,
   audio playing) → done (reply text + "Talk again"). Rotary scrolls long reply text.
 - Entry: a "Talk" pill on the recorder's idle screen, and a `com.orbit.action.TALK` action.

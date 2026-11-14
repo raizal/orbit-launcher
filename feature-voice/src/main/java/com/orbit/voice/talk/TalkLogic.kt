@@ -87,6 +87,8 @@ sealed interface TalkEvent {
     data class Level(val level: Float) : TalkEvent
     data object Saved : TalkEvent
     data class RecError(val message: String) : TalkEvent
+    /** The recording was cancelled and deleted: no turn, nothing sent. */
+    data object RecCancelled : TalkEvent
     /** Can't reach the companion now (not paired / not home / not found): stays queued. */
     data class Offline(val reason: String) : TalkEvent
     data object Uploaded : TalkEvent
@@ -109,6 +111,7 @@ object TalkMachine {
         is TalkEvent.Level -> if (s is TalkUi.Listening) s.copy(level = e.level) else s
         is TalkEvent.Saved -> if (s is TalkUi.Listening) TalkUi.Waiting(TalkUi.Phase.SENDING) else s
         is TalkEvent.RecError -> if (s is TalkUi.Listening) TalkUi.Idle(e.message) else s
+        is TalkEvent.RecCancelled -> if (s is TalkUi.Listening) TalkUi.Idle() else s
         is TalkEvent.Offline -> if (s is TalkUi.Waiting) TalkUi.Later(e.reason) else s
         is TalkEvent.Uploaded ->
             if (s is TalkUi.Waiting && s.phase == TalkUi.Phase.SENDING) TalkUi.Waiting(TalkUi.Phase.THINKING, "queued") else s

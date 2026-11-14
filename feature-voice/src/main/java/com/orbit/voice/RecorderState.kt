@@ -11,6 +11,8 @@ sealed interface RecorderUi {
     data class Recording(val fileName: String, val startElapsed: Long, val level: Float) : RecorderUi
     data class Saved(val fileName: String, val durationMs: Long) : RecorderUi
     data class Error(val message: String) : RecorderUi
+    /** The recording [fileName] was cancelled and deleted; nothing was saved. */
+    data class Cancelled(val fileName: String) : RecorderUi
 }
 
 /**
@@ -36,6 +38,8 @@ object RecorderState {
 
     fun error(message: String) = Intent(ACTION).putExtra(KIND, "error").putExtra(MESSAGE, message)
 
+    fun cancelled(name: String) = Intent(ACTION).putExtra(KIND, "cancelled").putExtra(NAME, name)
+
     fun parse(intent: Intent): RecorderUi? = when (intent.getStringExtra(KIND)) {
         "rec" -> RecorderUi.Recording(
             intent.getStringExtra(NAME).orEmpty().removeSuffix(NoteStore.TEMP_SUFFIX),
@@ -44,6 +48,7 @@ object RecorderState {
         )
         "saved" -> RecorderUi.Saved(intent.getStringExtra(NAME).orEmpty(), intent.getLongExtra(DURATION, 0))
         "error" -> RecorderUi.Error(intent.getStringExtra(MESSAGE).orEmpty())
+        "cancelled" -> RecorderUi.Cancelled(intent.getStringExtra(NAME).orEmpty())
         else -> null
     }
 

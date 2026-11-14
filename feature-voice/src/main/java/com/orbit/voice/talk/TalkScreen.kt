@@ -62,6 +62,7 @@ import com.orbit.core.OrbitColors
 import com.orbit.core.OrbitFonts
 import com.orbit.core.RotaryEffect
 import com.orbit.core.SvgIcon
+import com.orbit.voice.CancelButton
 import com.orbit.voice.TICKS
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -83,6 +84,7 @@ fun TalkScreen(
     playingStem: String?,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onCancel: () -> Unit,
     onSkip: () -> Unit,
     onReplay: (TalkTurn) -> Unit,
     onNew: () -> Unit,
@@ -90,7 +92,7 @@ fun TalkScreen(
     Box(Modifier.fillMaxSize()) {
         Rim(state, levels)
         when (state) {
-            is TalkUi.Listening -> Listening(state, onStop)
+            is TalkUi.Listening -> Listening(state, onStop, onCancel)
             is TalkUi.Waiting -> Waiting(state)
             is TalkUi.Speaking -> Reply(state.text, onSkip)
             // Resting states: the conversation, with the new turn in it.
@@ -306,7 +308,7 @@ private fun Rim(state: TalkUi, levels: FloatArray) {
 }
 
 @Composable
-private fun Listening(state: TalkUi.Listening, onStop: () -> Unit) {
+private fun Listening(state: TalkUi.Listening, onStop: () -> Unit, onCancel: () -> Unit) {
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(state.startElapsed) {
         while (true) {
@@ -339,6 +341,7 @@ private fun Listening(state: TalkUi.Listening, onStop: () -> Unit) {
     ) {
         Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(OrbitColors.OnAccent))
     }
+    CancelButton(onCancel, "Cancel — discard, send nothing")
     CenterText("Tap to stop", top = 332.dp, size = 12, color = OrbitColors.Muted)
 }
 

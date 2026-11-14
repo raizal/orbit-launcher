@@ -47,3 +47,14 @@ Visual reference: `design/` (HTML mockups; see `design/README.md`).
 - Tap targets ≥ 64 px on the real screen. Text must not sit in the corners of the square — keep dense text inside the inscribed square (~255 px centered).
 - When something in the docs is ambiguous or contradicts the device, stop and ask; do not guess silently.
 - Open decisions are listed in `docs/PLAN.md` → ask Raiz when you reach them.
+
+## Orbit orchestration (Raiz's rule)
+
+All Orbit work goes through the **Orbit orchestrator** BB thread `thr_834czrmc82` ("Orbit Orchestrator").
+- Any other thread working on Orbit (including threads the Orbit Talk backend spawns from the watch)
+  must keep the orchestrator informed: it should be the orchestrator's child (the companion spawns
+  Orbit-project threads that way automatically), report what it changed and how it was verified, work
+  on its own branch, and **not** merge into `main`, run `companion/deploy/install.sh`, or install on the
+  watch — the orchestrator reviews, merges, deploys and installs.
+- If you are not a child of the orchestrator, tell it: `bb thread tell thr_834czrmc82 --message-file <file>`.
+- The companion runs as the systemd user service `orbit-notes` (`companion/deploy/install.sh` to update).

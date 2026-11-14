@@ -31,6 +31,8 @@ codex_model = ""                         # for "codex"; empty = Codex default
 talk_provider = "codex"                  # "codex" (your `codex` CLI login) or "none"
 tts_voice = "en_US-lessac-medium"        # Piper voice, downloaded once into <data_dir>/voices/
 talk_timeout_s = 120
+orbit_project = "proj_puvrp7a3i8"          # BB project of Orbit itself
+orbit_orchestrator_thread = "thr_834czrmc82"  # threads spawned in orbit_project become its children ("" = off)
 talk_workspace = "bb"                    # "bb": Talk can read your BB workspace and propose actions (confirmed by voice); "none"
 """
 
@@ -57,6 +59,8 @@ class Config:
     tts_voice: str = "en_US-lessac-medium"
     talk_timeout_s: int = 120
     talk_workspace: str = "bb"
+    orbit_project: str = "proj_puvrp7a3i8"
+    orbit_orchestrator_thread: str = "thr_834czrmc82"
 
     @property
     def diary_dir(self) -> Path:

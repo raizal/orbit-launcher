@@ -285,6 +285,23 @@ def test_propose_confirm_execute_thread_spawn(talk, codex, bb, cfg):
     assert "executed thread_spawn" in codex.calls()[-1]["prompt"] and "thr_new1234567" in codex.calls()[-1]["prompt"]
 
 
+def test_orbit_project_spawn_becomes_child_of_orchestrator(talk, codex, bb, cfg):
+    """Raiz's rule: Orbit work goes through the orchestrator thread, so Orbit spawns are its children."""
+    cfg.orbit_project, cfg.orbit_orchestrator_thread = "proj_orbit", "thr_orch"
+    params = {"project": "orbit-launcher", "prompt": "Fix the clock drift.", "title": "Clock drift"}
+    codex.script(answer("New thread for the clock drift?", kind="thread_spawn", params=params, summary="Spawn"),
+                 answer("Okay.", confirmation="confirm"))
+    talk("Start a thread to fix the clock drift")
+    talk("Yes")
+    w = writes(bb())
+    assert w[0]["args"] == ["thread", "spawn", "--project=proj_orbit", "--prompt-file", "-", "--title=Clock drift",
+                            "--parent-thread=thr_orch", "--new-environment=worktree", "--base-branch=main", "--json"]
+    assert w[0]["stdin"].startswith("Fix the clock drift.") and "thr_orch" in w[0]["stdin"]
+    assert "don't merge into main" in w[0]["stdin"]
+    # The pending action itself never carries a parent (Codex can't choose one).
+    assert all("parent" not in e.get("params", {}) for e in ActionLog(cfg.data_dir).entries())
+
+
 def test_failed_execution_is_reported(talk, codex, bb, cfg, monkeypatch):
     codex.script(answer("Comment on ORB-1?", kind="task_comment", params={"key": "ORB-1", "body": "QR works"},
                         summary="Comment on ORB-1"),

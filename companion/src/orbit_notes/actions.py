@@ -277,13 +277,28 @@ class Command:
     env: dict[str, str] = field(default_factory=dict)  # extra env (e.g. BB_PROJECT_ID for project memories)
 
 
+ORCHESTRATED_FOOTER = """
+
+---
+Started from Orbit Talk (Raiz's watch). Orbit work is coordinated by the Orbit orchestrator thread
+{parent}, which is this thread's parent: it reviews and merges your branch, deploys the companion
+and installs on the watch. Work on your own branch, don't merge into main, don't run
+companion/deploy/install.sh, and follow CLAUDE.md. Report what you changed and how it was verified."""
+
+
 def command(kind: str, p: dict) -> Command:
-    """The exact bb invocation for validated params. `--key=value` so a value can never be read as a flag."""
+    """The exact bb invocation for validated params. `--key=value` so a value can never be read as a flag.
+    A thread_spawn with `parent` (set by the companion for Orbit-project spawns, never by Codex) becomes a
+    child of that orchestrator thread in its own worktree off main."""
     if kind == "thread_spawn":
         argv = ["thread", "spawn", f"--project={p['project']}", "--prompt-file", "-"]
         if "title" in p:
             argv.append(f"--title={p['title']}")
-        return Command(argv + ["--json"], stdin=p["prompt"])
+        prompt = p["prompt"]
+        if p.get("parent"):
+            argv += [f"--parent-thread={p['parent']}", "--new-environment=worktree", "--base-branch=main"]
+            prompt += ORCHESTRATED_FOOTER.format(parent=p["parent"])
+        return Command(argv + ["--json"], stdin=prompt)
     if kind == "thread_tell":
         return Command(["thread", "tell", p["thread_id"], "--message-file", "-", "--json"], stdin=p["message"])
     if kind == "task_create":

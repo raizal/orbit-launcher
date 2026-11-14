@@ -472,7 +472,12 @@ class Talker:
                 text = settings_result(p.params, s)
                 self.actions.audit("executed", pending=p, note_id=note.id, result_text=text)
                 return text
-            cmd = actions.command(p.kind, p.params)
+            params = p.params
+            if (p.kind == "thread_spawn" and self.cfg.orbit_orchestrator_thread
+                    and params.get("project") == self.cfg.orbit_project):
+                # Orbit work goes through the orchestrator thread (Raiz's rule): spawn as its child.
+                params = {**params, "parent": self.cfg.orbit_orchestrator_thread}
+            cmd = actions.command(p.kind, params)
             result = self.workspace.execute(cmd) if self.workspace else None
             if result is None:
                 raise TalkError("the BB workspace is not connected on this companion")

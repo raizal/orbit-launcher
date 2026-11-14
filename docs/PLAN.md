@@ -43,9 +43,9 @@ Spec: `docs/launcher.md`. Order: face renderer (JSON → Compose Canvas) → swi
 ## Open decisions — ask Raiz when you reach them
 
 1. ~~Where the companion runs~~ — **decided: local network only**, found by last IP → mDNS → subnet scan. Uploads only on home Wi-Fi.
-2. **Diary language:** Indonesian, English, or same as spoken. Needed before 2d.
-3. **Obsidian vault path** and folder for diary pages. Needed before 2d.
-4. **Transcription:** local faster-whisper (which model size fits the machine?) or a hosted API. Needed before 2c.
-5. **Diary LLM provider** (e.g. Claude API) and API key handling. Needed before 2d.
+2. ~~Diary language~~ — **decided: English.**
+3. ~~Vault~~ — **decided: `~/vault`, folder `Diary`** (audio copied to `Diary/audio/` as `.m4a`).
+4. ~~Transcription~~ — **decided: local faster-whisper `small`** (~5× real time on the PC).
+5. **Diary LLM:** none for now (page = notes + transcripts). Switch with `llm_provider = "anthropic"` + `ANTHROPIC_API_KEY`.
 6. **Rotary diary side panel:** does turning the rotary on the face only open the panel, or open it *and* start recording (one-press rule)? Needed before Phase 3.
 7. **Long-press BACK:** free — assign something (e.g. start recording from any Orbit screen)? Optional.

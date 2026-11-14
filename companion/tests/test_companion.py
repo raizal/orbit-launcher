@@ -204,11 +204,15 @@ def test_diary_page_with_no_llm(client, store, cfg):
     assert "(not transcribed yet)" in text
 
 
-def test_diary_links_inside_vault(client, store, cfg, tmp_path):
-    cfg.vault_dir = cfg.data_dir  # data dir inside the vault -> wikilinks
+def test_diary_embeds_vault_copy_of_audio(client, store, cfg, tmp_path):
+    cfg.vault_dir = cfg.data_dir  # vault set -> audio copied next to the diary pages and embedded
     add_note(client, store, "2026-11-13T07:02:10+07:00", "hello")
     text = diary.build(cfg, store, date(2026, 11, 13)).read_text()
-    assert "[[notes/2026/11/13/2026-11-13_07-02-10+0700.aac]]" in text
+    copies = list((cfg.diary_dir / "audio").glob("2026-11-13_07-02-10+0700.*"))
+    assert len(copies) == 1  # .m4a when ffmpeg can remux it; test bytes aren't real audio -> plain .aac copy
+    rel = copies[0].relative_to(cfg.vault_dir).as_posix()
+    assert f"![[{rel}]]" in text
+    assert (cfg.data_dir / "notes/2026/11/13/2026-11-13_07-02-10+0700.aac").exists()  # original untouched
 
 
 def test_diary_rewrite_preserves_text_outside_markers(client, store, cfg):

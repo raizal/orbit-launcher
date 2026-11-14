@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -20,7 +22,7 @@ FALLBACK_MODELS = {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "c
 class Entry:
     note: Note
     audio: Path
-    transcript: str | None  # None = not transcribed yet
+    transcript: str | None  # None = not transcribed yet, "" = transcribed, no speech
 
 
 @dataclass
@@ -41,9 +43,13 @@ def collect(store: Store, day: date) -> list[Entry]:
 # --- LLM providers -------------------------------------------------------------------------------
 
 
+def transcript_label(text: str | None) -> str:
+    return "(not transcribed yet)" if text is None else "(no speech)"
+
+
 def first_words(text: str | None, limit: int = 80) -> str:
     if not text:
-        return "(not transcribed yet)"
+        return transcript_label(text)
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
@@ -71,7 +77,7 @@ def generate_anthropic(cfg: Config, day: date, entries: list[Entry]) -> Generate
         else f"Write in {cfg.diary_language}."
     )
     notes = "\n\n".join(
-        f"[note {i}] {e.note.started:%H:%M}\n{e.transcript or '(not transcribed yet)'}" for i, e in enumerate(entries)
+        f"[note {i}] {e.note.started:%H:%M}\n{e.transcript or transcript_label(e.transcript)}" for i, e in enumerate(entries)
     )
     schema = {
         "type": "object",
@@ -116,10 +122,37 @@ PROVIDERS = {"none": generate_none, "anthropic": generate_anthropic}
 
 
 def audio_link(audio: Path, cfg: Config) -> str:
-    """Vault-relative wikilink when the audio is inside the vault, else an absolute file:// link."""
+    """Embedded player (`![[…]]`) when the audio is inside the vault, else an absolute file:// link."""
     if cfg.vault_dir and audio.resolve().is_relative_to(cfg.vault_dir.resolve()):
-        return f"[[{audio.resolve().relative_to(cfg.vault_dir.resolve()).as_posix()}]]"
+        return f"![[{audio.resolve().relative_to(cfg.vault_dir.resolve()).as_posix()}]]"
     return f"[{audio.name}](<{audio.resolve().as_uri()}>)"
+
+
+def vault_copy(audio: Path, cfg: Config) -> Path:
+    """
+    Copy of the note in `<diary folder>/audio/` so Obsidian can play it. Obsidian
+    doesn't play raw ADTS `.aac`, so it is remuxed (no re-encode) into `.m4a` with
+    ffmpeg; without ffmpeg the `.aac` is copied as-is. The original is never touched.
+    """
+    out_dir = cfg.diary_dir / "audio"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    m4a = out_dir / f"{audio.stem}.m4a"
+    if m4a.exists():
+        return m4a
+    tmp = out_dir / f".{audio.stem}.tmp.m4a"
+    if shutil.which("ffmpeg"):
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(audio), "-c", "copy", "-movflags", "+faststart", str(tmp)],
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            tmp.replace(m4a)
+            return m4a
+        tmp.unlink(missing_ok=True)
+    copy = out_dir / audio.name
+    if not copy.exists():
+        shutil.copy2(audio, copy)
+    return copy
 
 
 def fmt_duration(ms: int | None) -> str:
@@ -139,7 +172,7 @@ def render_block(day: date, entries: list[Entry], gen: Generated, cfg: Config) -
     lines += ["", "## Transcripts", ""]
     for e in entries:
         lines.append(f"> [!quote]- {e.note.started:%H:%M} · {e.note.stem}")
-        body = e.transcript or "(not transcribed yet)"
+        body = e.transcript or transcript_label(e.transcript)
         lines += [f"> {line}" if line else ">" for line in body.splitlines()]
         lines.append("")
     lines.append(END)
@@ -170,6 +203,8 @@ def build(cfg: Config, store: Store, day: date) -> Path:
     if cfg.llm_provider not in PROVIDERS:
         raise ValueError(f"unknown llm_provider {cfg.llm_provider!r}; use one of {', '.join(PROVIDERS)}")
     entries = collect(store, day)
+    if cfg.vault_dir:
+        entries = [Entry(e.note, vault_copy(e.audio, cfg), e.transcript) for e in entries]
     page = cfg.diary_dir / f"{day.isoformat()}.md"
     gen = PROVIDERS[cfg.llm_provider](cfg, day, entries) if entries else Generated("_No notes recorded this day._", [])
     block = render_block(day, entries, gen, cfg)

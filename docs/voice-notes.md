@@ -52,7 +52,8 @@ Rule: one press from the face must start recording within 1 second, with a short
 }
 ```
 
-`location` is optional and coarse (last known location only; never wait for a GPS fix). **Not written yet** (the watch has no last-known location without a fix). A sidecar may also carry `"recovered": true` (finalized after a crash).
+`location` is optional and coarse (last known location only; never wait for a GPS fix). **Not written yet** (the watch has no last-known location without a fix). A sidecar may also carry `"recovered": true` (finalized after a crash). Talk turns add `"mode": "talk"`,
+optionally `"conversation": "new"` (docs/talk.md) and `"about": "<inbox item id>"` (docs/inbox.md).
 
 ## Queue & states
 

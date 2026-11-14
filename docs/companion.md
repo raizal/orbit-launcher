@@ -10,6 +10,8 @@ orbit-notes pair [--name home-pc] # print pairing QR in the terminal (and save P
 orbit-notes transcribe [--all]    # transcribe notes that have no transcript yet
 orbit-notes diary 2026-11-13      # build the diary page for one day
 orbit-notes diary --yesterday     # for a daily cron / scheduled task
+orbit-notes inbox add --title "…" [--body "…"]   # send a short item to the watch (docs/inbox.md)
+orbit-notes inbox list | read <id>
 ```
 
 ## Config (`config.toml` + env overrides)

@@ -12,9 +12,10 @@ object VoiceEntry {
      * Starts the recorder service and buzzes. Caller must hold RECORD_AUDIO.
      * Returns the press time, which names the file. [mode] goes into the sidecar
      * (`"talk"` for a Talk turn); null = normal note. [conversation] = `"new"` on
-     * the first Talk turn after New; null = continue the latest conversation.
+     * the first Talk turn after New; null = continue the latest conversation. [about] = the
+     * inbox item id a Talk turn is about (docs/inbox.md).
      */
-    fun startRecording(context: Context, mode: String? = null, conversation: String? = null): Long {
+    fun startRecording(context: Context, mode: String? = null, conversation: String? = null, about: String? = null): Long {
         val pressedAt = System.currentTimeMillis()
         context.startForegroundService(
             Intent(context, RecorderService::class.java)
@@ -22,6 +23,7 @@ object VoiceEntry {
                 .putExtra(RecorderService.EXTRA_PRESSED_AT, pressedAt)
                 .apply { if (mode != null) putExtra(RecorderService.EXTRA_MODE, mode) }
                 .apply { if (conversation != null) putExtra(RecorderService.EXTRA_CONVERSATION, conversation) }
+                .apply { if (about != null) putExtra(RecorderService.EXTRA_ABOUT, about) }
         )
         context.getSystemService(Vibrator::class.java)
             ?.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))

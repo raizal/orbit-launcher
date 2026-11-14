@@ -14,6 +14,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .config import Config
+from .inbox import shared as shared_inbox
+from .inbox_api import mount_inbox
 from .store import TALK_ACTIVE, Store, parse_started_at
 from .talk import reply_paths
 
@@ -140,6 +142,7 @@ def create_app(
             })
         return {"conversation": conversation, "turns": turns}
 
+    mount_inbox(app, require_token, *shared_inbox(cfg))  # docs/inbox.md
     return app
 
 

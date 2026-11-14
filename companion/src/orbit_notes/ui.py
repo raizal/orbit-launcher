@@ -21,6 +21,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import actions, diary, insights
 from .config import Config
+from .inbox import shared as shared_inbox
+from .inbox_api import mount_inbox_ui
 from .store import Note, Store
 from .talk import PERSONA, reply_paths
 
@@ -230,6 +232,7 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
         qrcode.make(payload, border=2).save(buf, format="PNG")
         return Response(buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
+    mount_inbox_ui(api, *shared_inbox(cfg))  # docs/inbox.md
     app.include_router(api)
 
     @app.get("/", include_in_schema=False, dependencies=[Depends(require_local)])

@@ -33,6 +33,7 @@ class RecorderService : Service() {
     private var startElapsed = 0L
     private var mode: String? = null
     private var conversation: String? = null
+    private var about: String? = null
     private val handler = Handler(Looper.getMainLooper())
 
     private val ticker = object : Runnable {
@@ -60,6 +61,7 @@ class RecorderService : Service() {
                 intent.getLongExtra(EXTRA_PRESSED_AT, System.currentTimeMillis()),
                 intent.getStringExtra(EXTRA_MODE),
                 intent.getStringExtra(EXTRA_CONVERSATION),
+                intent.getStringExtra(EXTRA_ABOUT),
             )
             ACTION_STOP -> stop()
             ACTION_CANCEL -> cancel(intent.getStringExtra(EXTRA_FILE))
@@ -68,7 +70,7 @@ class RecorderService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun start(pressedAtMs: Long, mode: String?, conversation: String?) {
+    private fun start(pressedAtMs: Long, mode: String?, conversation: String?, about: String?) {
         if (recorder != null) return
         startForeground(NOTIFICATION_ID, notification())
 
@@ -98,6 +100,7 @@ class RecorderService : Service() {
         startedAtMs = pressedAtMs
         this.mode = mode
         this.conversation = conversation
+        this.about = about
         startElapsed = SystemClock.elapsedRealtime()
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "orbit:voice")
@@ -123,7 +126,7 @@ class RecorderService : Service() {
 
         val file = temp!!
         if (stopped) {
-            runCatching { store.finalize(file, startedAtMs, durationMs, mode = mode, conversation = conversation) }
+            runCatching { store.finalize(file, startedAtMs, durationMs, mode = mode, conversation = conversation, about = about) }
                 .onSuccess {
                     broadcast(RecorderState.saved(it.name, durationMs))
                     NoteSavedReceiver.notify(this)
@@ -212,6 +215,8 @@ class RecorderService : Service() {
         const val EXTRA_MODE = "mode"
         /** Optional sidecar `conversation` (`"new"` = start a new Talk conversation). */
         const val EXTRA_CONVERSATION = "conversation"
+        /** Optional sidecar `about`: the inbox item id this Talk turn is about (docs/inbox.md). */
+        const val EXTRA_ABOUT = "about"
         private const val TAG = "OrbitVoice"
         private const val CHANNEL = "recording"
         private const val NOTIFICATION_ID = 7

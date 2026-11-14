@@ -102,6 +102,8 @@ class LauncherActivity : ComponentActivity(), LauncherNav {
     override fun onStart() {
         super.onStart()
         env.faces.start()
+        // The face came on: a cheap moment to check the Orbit Inbox (at most every 2 min; docs/inbox.md).
+        com.orbit.voice.inbox.InboxSync.maybeKick(this)
         lifecycleScope.launch { WeatherRepo.refresh(this@LauncherActivity) }
         // The system's own bind fails while we are not running (vendor launch gate), e.g. after
         // install or at boot; give a pending bind a moment, then make it bind us now.

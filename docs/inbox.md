@@ -79,7 +79,10 @@ Completions from before the producer's first run are recorded silently (no backl
   screen is open. Checks need pairing + home Wi-Fi + the companion's last known IP (or mDNS);
   otherwise they end at once. No retries/backoff: the next cheap moment comes soon enough.
 - **Local state**: `files/inbox/state.json` (cursor, ≤ 100 items newest first, reads not yet
-  acknowledged, last check time). Reads made on the watch are kept until the companion confirms them.
+  acknowledged, last check time, and which companion it belongs to: `name:port:<sha256(token)[:6]>`).
+  Reads made on the watch are kept until the companion confirms them. Paired to another companion,
+  or the companion's cursor went backwards (its data was reset) → the state starts afresh (cursor 0,
+  quiet first sync, old notifications removed).
 - **New items** (unread, not seen before; never on the very first sync) → one Android notification
   per item (silent channel "Inbox", up to 5 per batch) + one short 90 ms buzz per batch, skipped
   while a recording runs. Reading an item anywhere cancels its notification.

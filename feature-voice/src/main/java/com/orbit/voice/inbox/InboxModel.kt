@@ -34,6 +34,8 @@ data class InboxState(
     val items: List<InboxItem> = emptyList(),
     val pendingReads: Set<String> = emptySet(),
     val lastCheckMs: Long = 0,
+    /** Which companion this state belongs to ([InboxLogic.serverKey]); another one starts afresh. */
+    val server: String? = null,
 ) {
     val unreadCount: Int get() = items.count { it.unread }
     fun item(id: String): InboxItem? = items.firstOrNull { it.id == id }
@@ -50,6 +52,22 @@ object InboxLogic {
         val r = JSON.decodeFromString(InboxResponse.serializer(), body)
         r.copy(items = r.items.filter { it.id.isNotBlank() && it.title.isNotBlank() && it.created_at.isNotBlank() })
     }.getOrNull()
+
+    /** Identifies the paired companion without storing its token. */
+    fun serverKey(name: String, port: Int, token: String): String =
+        "$name:$port:" + java.security.MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
+            .take(6).joinToString("") { "%02x".format(it) }
+
+    /**
+     * The state to sync [server] with: unchanged, or empty (cursor 0) when it belonged to another
+     * companion — a cursor from one companion means nothing to another. Items, reads and
+     * notifications of the old one are dropped; the next sync is a quiet first sync.
+     */
+    fun forServer(state: InboxState, server: String): InboxState =
+        if (state.server == server) state else InboxState(lastCheckMs = state.lastCheckMs, server = server)
+
+    /** The companion's cursor went backwards (its data was reset): start again from 0. */
+    fun cursorWentBack(state: InboxState, resp: InboxResponse): Boolean = resp.cursor < state.cursor
 
     /** [state] after a poll + the items to announce (notification + buzz). */
     data class Merge(val state: InboxState, val announce: List<InboxItem>)
@@ -76,7 +94,10 @@ object InboxLogic {
         val first = state.cursor == 0L && state.items.isEmpty()
         val announce = if (first) emptyList() else resp.items.filter { it.id !in known && it.unread && it.id in kept }
         return Merge(
-            InboxState(cursor = maxOf(state.cursor, resp.cursor), items = items, pendingReads = pending.filterTo(HashSet()) { it in kept }, lastCheckMs = nowMs),
+            InboxState(
+                cursor = maxOf(state.cursor, resp.cursor), items = items,
+                pendingReads = pending.filterTo(HashSet()) { it in kept }, lastCheckMs = nowMs, server = state.server,
+            ),
             announce.sortedByDescending { it.created_at },
         )
     }

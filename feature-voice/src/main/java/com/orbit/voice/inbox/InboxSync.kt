@@ -135,7 +135,8 @@ object InboxSync {
         load(app)
         lock.withLock {
             val link = link(app) ?: return@withLock false
-            var st = _state.value
+            var st = InboxLogic.forServer(_state.value, link.server)
+            if (st !== _state.value) InboxNotifier.clear(app, _state.value) // re-paired: the old companion's items go
             if (!pollOnly) {
                 for (id in st.pendingReads) {
                     when (link.read(id)) {
@@ -144,7 +145,13 @@ object InboxSync {
                     }
                 }
             }
-            val resp = link.poll(st.cursor) ?: return@withLock false.also { save(app, st) }
+            var resp = link.poll(st.cursor) ?: return@withLock false.also { save(app, st) }
+            if (InboxLogic.cursorWentBack(st, resp)) {
+                Log.i(TAG, "companion cursor went back (${st.cursor} → ${resp.cursor}); starting afresh")
+                InboxNotifier.clear(app, st)
+                st = InboxState(server = st.server)
+                resp = link.poll(0) ?: return@withLock false.also { save(app, st) }
+            }
             val merge = InboxLogic.merge(st, resp, System.currentTimeMillis())
             save(app, merge.state)
             InboxNotifier.update(app, merge.state, merge.announce)
@@ -168,13 +175,14 @@ object InboxSync {
         val ip = prefs.lastIp
             ?: Discovery(context, OrbitClient(wifi.network.socketFactory), prefs).find(wifi, pairing, allowScan = false)
             ?: return null
-        return Link(wifi.network.socketFactory, "http://$ip:${pairing.port}", pairing.token)
+        return Link(wifi.network.socketFactory, "http://$ip:${pairing.port}", pairing.token,
+            InboxLogic.serverKey(pairing.name, pairing.port, pairing.token))
     }
 
     private fun unmetered() = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build()
 
     /** The two inbox calls, bound to the Wi-Fi network like every companion call. */
-    private class Link(socketFactory: SocketFactory, private val base: String, private val token: String) {
+    private class Link(socketFactory: SocketFactory, private val base: String, private val token: String, val server: String) {
         private val http = OkHttpClient.Builder()
             .socketFactory(socketFactory)
             .connectTimeout(3, TimeUnit.SECONDS)
@@ -248,6 +256,12 @@ object InboxNotifier {
             context.getSystemService(Vibrator::class.java)
                 ?.vibrate(VibrationEffect.createOneShot(90, VibrationEffect.DEFAULT_AMPLITUDE))
         }
+    }
+
+    /** Removes every notification of [state]'s items (the state is being dropped). */
+    fun clear(context: Context, state: InboxState) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        for (item in state.items) nm.cancel(tag(item.id), 0)
     }
 
     fun cancel(context: Context, id: String) =

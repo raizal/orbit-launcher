@@ -1,6 +1,7 @@
 package com.orbit.voice.inbox
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -94,6 +95,24 @@ class InboxLogicTest {
         assertEquals(InboxLogic.KEEP, m.state.items.size)
         assertNull(m.state.item("x")) // the oldest went
         assertTrue(m.announce.all { m.state.item(it.id) != null })
+    }
+
+    @Test fun anotherCompanionStartsAfresh() {
+        val a = InboxLogic.serverKey("home-pc", 8765, "token-aaaaaaaaaaaaaaaa")
+        val b = InboxLogic.serverKey("home-pc", 8811, "token-aaaaaaaaaaaaaaaa")
+        assertTrue(a != b && !a.contains("token"))
+        val s = InboxLogic.merge(InboxLogic.forServer(InboxState(), a), InboxResponse(6, 1, listOf(item("a", 6, 1))), 9).state
+        assertEquals(a, s.server)
+        assertEquals(s, InboxLogic.forServer(s, a))
+        val other = InboxLogic.forServer(s, b)
+        assertEquals(0L, other.cursor)
+        assertTrue(other.items.isEmpty() && other.pendingReads.isEmpty())
+        assertEquals(9L, other.lastCheckMs)
+        // Same companion, data reset: its cursor is now below ours.
+        assertTrue(InboxLogic.cursorWentBack(s, InboxResponse(2)))
+        assertFalse(InboxLogic.cursorWentBack(s, InboxResponse(6)))
+        // A state saved before `server` existed belongs to nobody: it starts afresh too.
+        assertEquals(0L, InboxLogic.forServer(s.copy(server = null), a).cursor)
     }
 
     @Test fun ages() {

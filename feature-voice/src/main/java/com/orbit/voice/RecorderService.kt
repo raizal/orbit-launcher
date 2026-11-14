@@ -31,6 +31,7 @@ class RecorderService : Service() {
     private var temp: File? = null
     private var startedAtMs = 0L
     private var startElapsed = 0L
+    private var mode: String? = null
     private val handler = Handler(Looper.getMainLooper())
 
     private val ticker = object : Runnable {
@@ -54,14 +55,17 @@ class RecorderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> start(intent.getLongExtra(EXTRA_PRESSED_AT, System.currentTimeMillis()))
+            ACTION_START -> start(
+                intent.getLongExtra(EXTRA_PRESSED_AT, System.currentTimeMillis()),
+                intent.getStringExtra(EXTRA_MODE),
+            )
             ACTION_STOP -> stop()
             else -> if (recorder == null) stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    private fun start(pressedAtMs: Long) {
+    private fun start(pressedAtMs: Long, mode: String?) {
         if (recorder != null) return
         startForeground(NOTIFICATION_ID, notification())
 
@@ -89,6 +93,7 @@ class RecorderService : Service() {
         recorder = r
         temp = file
         startedAtMs = pressedAtMs
+        this.mode = mode
         startElapsed = SystemClock.elapsedRealtime()
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "orbit:voice")
@@ -112,7 +117,7 @@ class RecorderService : Service() {
 
         val file = temp!!
         if (stopped) {
-            runCatching { store.finalize(file, startedAtMs, durationMs) }
+            runCatching { store.finalize(file, startedAtMs, durationMs, mode = mode) }
                 .onSuccess {
                     broadcast(RecorderState.saved(it.name, durationMs))
                     NoteSavedReceiver.notify(this)
@@ -166,6 +171,8 @@ class RecorderService : Service() {
         const val ACTION_START = "com.orbit.voice.START"
         const val ACTION_STOP = "com.orbit.voice.STOP"
         const val EXTRA_PRESSED_AT = "pressed_at"
+        /** Optional note mode for the sidecar (`"talk"`); absent = normal note. */
+        const val EXTRA_MODE = "mode"
         private const val TAG = "OrbitVoice"
         private const val CHANNEL = "recording"
         private const val NOTIFICATION_ID = 7

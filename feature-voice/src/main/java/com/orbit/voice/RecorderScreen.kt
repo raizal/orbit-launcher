@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.orbit.core.OrbitColors
 import com.orbit.core.OrbitFonts
+import com.orbit.core.SvgIcon
+import com.orbit.voice.talk.BUBBLE_ICON
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -60,12 +62,13 @@ fun RecorderScreen(
     onStop: () -> Unit,
     onNewNote: () -> Unit,
     onInbox: () -> Unit,
+    onTalk: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         LevelRing(levels, recording = state is RecorderUi.Recording)
         when (state) {
-            is RecorderUi.Idle -> Idle(waiting, null, onStart, onInbox)
-            is RecorderUi.Error -> Idle(waiting, state.message, onStart, onInbox)
+            is RecorderUi.Idle -> Idle(waiting, null, onStart, onInbox, onTalk)
+            is RecorderUi.Error -> Idle(waiting, state.message, onStart, onInbox, onTalk)
             is RecorderUi.Recording -> Recording(state, onStop)
             is RecorderUi.Saved -> Saved(state, onNewNote)
         }
@@ -96,7 +99,7 @@ private fun LevelRing(levels: FloatArray, recording: Boolean) {
 }
 
 @Composable
-private fun Idle(waiting: Int, error: String?, onStart: () -> Unit, onInbox: () -> Unit) {
+private fun Idle(waiting: Int, error: String?, onStart: () -> Unit, onInbox: () -> Unit, onTalk: () -> Unit) {
     var clock by remember { mutableStateOf(clockNow()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -104,7 +107,26 @@ private fun Idle(waiting: Int, error: String?, onStart: () -> Unit, onInbox: () 
             delay(1_000)
         }
     }
-    CenterText(clock, top = 78.dp, size = 26, weight = FontWeight.SemiBold, font = OrbitFonts.Grotesk, color = OrbitColors.Muted)
+    // "Talk" pill at the top (not in the design file): 108 × 40 visual, 64 px-tall touch target.
+    Box(
+        Modifier
+            .offset(146.dp, 22.dp)
+            .size(108.dp, 64.dp)
+            .clickable(onClick = onTalk)
+            .semantics { contentDescription = "Talk" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.size(108.dp, 40.dp).clip(RoundedCornerShape(50)).background(OrbitColors.Surface),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SvgIcon(BUBBLE_ICON, 18.dp, OrbitColors.Info)
+            Spacer(Modifier.width(7.dp))
+            BasicText("Talk", style = style(14, FontWeight.SemiBold))
+        }
+    }
+    CenterText(clock, top = 92.dp, size = 22, weight = FontWeight.SemiBold, font = OrbitFonts.Grotesk, color = OrbitColors.Muted)
     Box(
         Modifier
             .offset(140.dp, 128.dp)

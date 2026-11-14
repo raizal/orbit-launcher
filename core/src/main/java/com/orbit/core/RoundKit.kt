@@ -25,17 +25,25 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.core.content.res.ResourcesCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /**
  * Rotary crown. On the H10 it is a sensor (type 36), not input events:
  * one event per detent, values[0] = 9 (clockwise) or 5 (counter-clockwise).
  * [onStep] gets +1 for clockwise, −1 for counter-clockwise.
+ *
+ * Listens only while the activity is resumed: a sensor listener is not tied to
+ * focus, so an activity in the back stack (e.g. the launcher) would otherwise
+ * react to the crown under the screen in front.
  */
 @Composable
 fun RotaryEffect(onStep: (Int) -> Unit) {
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val step = rememberUpdatedState(onStep)
-    DisposableEffect(Unit) {
+    DisposableEffect(lifecycle) {
         val sm = context.getSystemService(SensorManager::class.java)
         val sensor = sm.getSensorList(Sensor.TYPE_ALL)
             .firstOrNull { it.stringType == "android.sensor.rotary_encoder" || it.type == 36 }
@@ -48,8 +56,18 @@ fun RotaryEffect(onStep: (Int) -> Unit) {
             }
             override fun onAccuracyChanged(s: Sensor?, a: Int) = Unit
         }
-        sensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME) }
-        onDispose { sm.unregisterListener(listener) }
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> sensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME) }
+                Lifecycle.Event.ON_PAUSE -> sm.unregisterListener(listener)
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer) // replays ON_RESUME if already resumed
+        onDispose {
+            lifecycle.removeObserver(observer)
+            sm.unregisterListener(listener)
+        }
     }
 }
 

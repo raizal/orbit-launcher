@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.orbit.core.RoundScreen
+import com.orbit.voice.talk.TalkActivity
 import com.orbit.voice.upload.Queue
 
 /**
@@ -72,6 +73,7 @@ class RecorderActivity : ComponentActivity() {
                     onStop = { VoiceEntry.stopRecording(this) },
                     onNewNote = { ui = RecorderUi.Idle },
                     onInbox = { startActivity(Intent(this, InboxActivity::class.java)) },
+                    onTalk = { startActivity(Intent(this, TalkActivity::class.java)) },
                 )
             }
         }

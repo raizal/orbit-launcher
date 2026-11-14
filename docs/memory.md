@@ -62,3 +62,54 @@ After the Talk briefing/reflection/mood work is merged (same talk.py prompt area
 1. Episodic index + backfill + hybrid search API (`/ui/api/memory/search`) + tests.
 2. Recall in Talk turns.
 3. Distilled facts + corrections (web UI + voice) + Obsidian view + diary links.
+
+## Implementation
+
+Code: `companion/src/orbit_notes/memory.py` (index, search, recall, facts, view), `memory_api.py` (web UI API),
+web `MemoryPanel.svelte`. Tests: `companion/tests/test_memory.py` (a fake hashing embedder from `conftest.py`, so
+tests never download a model).
+
+### Episodic index (step 1)
+
+- **Storage**: `<data_dir>/memory.sqlite` (WAL), separate from `index.sqlite`. Tables: `chunks` (source
+  `note | reply | diary | reflection`, ref = note id or date, local date, `at` with the watch's offset, text,
+  `excluded`, `vec` float32 BLOB), `chunks_fts` (FTS5, `unicode61 remove_diacritics 2`, rowid = chunk id),
+  `sources` (sha of each indexed text → unchanged sources are skipped), plus `facts`, `tags`, `forgotten`, `meta`.
+  Everything except facts/tags/forgotten can be rebuilt from the notes on disk (`memory backfill`).
+- **Chunks**: a note ≤ 480 chars is one chunk; longer text is split into ~1–3 sentences (≤ ~320 chars, run-on
+  speech split at word boundaries). Diary pages: only the page's own prose (orbit block before `## Notes`,
+  no headings / `**Mentions:**` line); reflections from `data_dir/reflections/`.
+- **Model**: `multilingual-e5-small`, int8 ONNX export `Xenova/multilingual-e5-small` (pinned revision), run
+  with `onnxruntime` + `tokenizers` — both already installed for faster-whisper, so **no new dependency**.
+  118 MB, downloaded once into the Hugging Face cache (`~/.cache/huggingface/hub`, next to whisper's model).
+  384-dim, e5 `query:` / `passage:` prefixes, mean pooling. `memory_embedder = "none"` → keyword search only.
+  Measured on this laptop (load average ~6–15): load 1.6–2.5 s; 92 chunks in 2.6 s (4 threads); one query
+  ~10 ms. Chosen over fp32 e5-small (470 MB, same quality), e5-base int8 (279 MB, worse on this archive, 10×
+  slower) and paraphrase-multilingual-MiniLM (worse ranking) on a small labelled set of real notes, including
+  Indonesian queries against English notes.
+- **Lazy & cheap**: `serve` starts without loading the model. Text goes into FTS immediately (any process, e.g.
+  the `diary` cron); a background thread in `serve` (nice +10, one ONNX thread on that thread) catches up
+  with the archive at start, indexes each note after transcription (and its talk reply after the turn), and
+  fills missing vectors. A talk note warms the model while whisper runs.
+- **Search** (`Memory.search`): FTS5 BM25 over content words (English + Indonesian stop words, question and
+  date words dropped; words ≥ 4 chars as prefixes) + brute-force cosine over all vectors (cached matrix),
+  merged by reciprocal rank fusion (k = 60), up to 2 chunks per source, recency breaks ties. Short questions
+  are embedded as their content words (the question wording otherwise outweighs the topic). The model's
+  cosine scores are compressed (unrelated queries still score ~0.83 here), so there is **no similarity
+  floor**: everyday Talk turns use keyword-confirmed hits only; explicit recall shows the top hybrid hits and
+  Codex judges them (see Recall).
+- **Date ranges** in questions (`parse_range`): today / yesterday / kemarin, N days ago, last / past N days,
+  this / last week (Mon–Sun), this / last month, "in October", "on Monday" (EN + ID). A range with no topic
+  ("what did I say last week?") lists that period: diary prose and reflections first, then his notes.
+- **Backfill**: `orbit-notes memory backfill [-c config] [--threads 4]` (incremental; prints timings and index
+  stats); `orbit-notes memory search "…" [--from --to]` for a quick check. `serve` does the same catch-up in
+  the background.
+- **API** (loopback only, under `/ui/api`):
+  ```
+  GET /memory/search?q=&limit=20&from=YYYY-MM-DD&to=YYYY-MM-DD&tag=Name
+    200 {"query": "…", "hits": [{id, source, ref, note_id, local_date, at, mode, text, score, sim, keyword,
+                                 when: "Tue 03 Nov 2026 21:14", label: "voice note"}]}
+  GET /memory/status   → {chunks, embedded, excluded, first_date, last_date, facts: {status: n}, tags,
+                          forgotten, bytes, model}
+  ```
+  Web UI → **Memory**: search box (+ optional date range) with dated results.

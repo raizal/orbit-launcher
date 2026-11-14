@@ -34,6 +34,9 @@ talk_timeout_s = 120
 orbit_project = "proj_puvrp7a3i8"          # BB project of Orbit itself
 orbit_orchestrator_thread = "thr_834czrmc82"  # threads spawned in orbit_project become its children ("" = off)
 talk_workspace = "bb"                    # "bb": Talk can read your BB workspace and propose actions (confirmed by voice); "none"
+# Memory & recall (docs/memory.md): local multilingual embeddings, downloaded once into ~/.cache/huggingface
+memory_embedder = "multilingual-e5-small"  # or "none" (keyword search only)
+# memory_page = "~/Obsidian/MyVault/Orbit/Memory.md"   # unset -> <diary folder>/../Orbit/Memory.md
 """
 
 
@@ -61,6 +64,8 @@ class Config:
     talk_workspace: str = "bb"
     orbit_project: str = "proj_puvrp7a3i8"
     orbit_orchestrator_thread: str = "thr_834czrmc82"
+    memory_embedder: str = "multilingual-e5-small"
+    memory_page: Path | None = None
 
     @property
     def diary_dir(self) -> Path:
@@ -107,7 +112,7 @@ def load(explicit: Path | None = None, *, create: bool = True) -> Config:
             continue
         if f.name in ("port", "codex_timeout_s", "talk_timeout_s"):
             value = int(value)
-        elif f.name in ("data_dir", "vault_dir"):
+        elif f.name in ("data_dir", "vault_dir", "memory_page"):
             p = Path(str(value)).expanduser()
             value = p if p.is_absolute() else (path.parent / p).resolve()
         setattr(cfg, f.name, value)

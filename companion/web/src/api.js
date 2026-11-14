@@ -28,6 +28,8 @@ export const api = {
     }
     return res.blob()
   },
+  memoryStatus: () => call('/memory/status'),
+  memorySearch: (q, from, to) => call(`/memory/search?${new URLSearchParams({ q, ...(from ? { from } : {}), ...(to ? { to } : {}) })}`),
   days: () => call('/days'),
   notes: (day) => call(`/notes?day=${day}`),
   retranscribe: (id) => call(`/notes/${id}/transcribe`, { method: 'POST' }),

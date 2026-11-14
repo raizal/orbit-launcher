@@ -61,8 +61,9 @@ class Worker:
 
     TALK, NORMAL, STOP = 0, 1, 2  # queue priorities, lower first; stop() comes after queued work (as before)
 
-    def __init__(self, store: Store, transcriber: Transcriber, talker=None):
+    def __init__(self, store: Store, transcriber: Transcriber, talker=None, memory=None):
         self.store, self.transcriber, self.talker = store, transcriber, talker
+        self.memory = memory  # memory.Memory: indexes each note after its transcript (and talk reply) exist
         self.queue: queue.PriorityQueue[tuple[int, int, str | None]] = queue.PriorityQueue()
         self._seq = itertools.count()  # FIFO within a priority
         self.thread = threading.Thread(target=self._loop, name="transcriber", daemon=True)
@@ -73,6 +74,8 @@ class Worker:
         for note in self.store.pending_transcripts():
             if not note.is_talk:
                 self.enqueue(note.id)
+        if self.memory:
+            self.memory.start()  # catches up with the archive in the background
         self.thread.start()
 
     def enqueue(self, note_id: str) -> None:
@@ -109,3 +112,7 @@ class Worker:
                     continue
             if talk:
                 self.talker.run(self.store.get(note_id))
+            if self.memory:
+                self.memory.enqueue_note(note_id)
+        if self.memory:
+            self.memory.stop()  # after the queued notes were handed over

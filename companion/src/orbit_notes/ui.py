@@ -62,8 +62,9 @@ def note_json(store: Store, n: Note) -> dict:
 
 
 def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], None] | None,
-             tts: Callable[..., None] | None = None) -> None:
-    """`tts` is the Talker's synthesizer (shares loaded voices); without one, a PiperTTS is made on first preview."""
+             tts: Callable[..., None] | None = None, memory=None) -> None:
+    """`tts` is the Talker's synthesizer (shares loaded voices); without one, a PiperTTS is made on first preview.
+    `memory` is the server's memory.Memory (one is made if not given)."""
     api = APIRouter(prefix="/ui/api", dependencies=[Depends(require_local)])
     settings_store = actions.SettingsStore(cfg.data_dir, cfg.tts_voice)
     synth: list[Callable[..., None]] = [tts] if tts else []
@@ -230,6 +231,10 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
         qrcode.make(payload, border=2).save(buf, format="PNG")
         return Response(buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
+    from .memory import Memory
+    from .memory_api import mount_memory_api
+
+    mount_memory_api(api, memory or Memory(cfg, store))
     app.include_router(api)
 
     @app.get("/", include_in_schema=False, dependencies=[Depends(require_local)])

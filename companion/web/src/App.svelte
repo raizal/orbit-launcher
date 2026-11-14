@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { api, fmtDay, fmtDuration, fmtTime, todayIso } from './api.js'
   import { renderDiary } from './markdown.js'
+  import MemoryPanel from './MemoryPanel.svelte'
 
   let status = $state(null)
   let days = $state([])
@@ -11,6 +12,7 @@
   let building = $state(false)
   let showPair = $state(false)
   let showMood = $state(false)
+  let showMemory = $state(false)
   let mood = $state(null) // { from, days: [{date, mood, energy, notes, used, low_only}], notes, unrated }
   let moodDays = $state(30)
   let showSource = $state(false)
@@ -172,7 +174,7 @@
   })
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showMood = false), closeTalk())} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showMood = false), (showMemory = false), closeTalk())} />
 
 <header>
   <div class="brand">
@@ -194,6 +196,7 @@
     Talk assistant{#if talk?.pending && !talk.pending.expired}<span class="pending-dot" title="An action waits for confirmation"></span>{/if}
   </button>
   <button onclick={openMood} title="Private: estimates only, never shown on the watch">Mood</button>
+  <button onclick={() => (showMemory = true)} title="Search your notes; facts Orbit remembers">Memory</button>
   <button onclick={() => (showPair = true)}>Pair watch</button>
 </header>
 
@@ -276,6 +279,8 @@
     {/if}
   </aside>
 </main>
+
+{#if showMemory}<MemoryPanel onclose={() => (showMemory = false)} />{/if}
 
 {#if showPair}
   <!-- Backdrop click closes; Escape is handled on the window. -->

@@ -33,16 +33,18 @@ def serve(config: ConfigOpt = None, mdns: bool = typer.Option(True, help="Advert
     import uvicorn
 
     from .api import create_app, serve_lifespan
+    from .memory import Memory
     from .talk import Talker
     from .transcribe import Transcriber, Worker
     from .ui import mount_ui
 
     cfg, store = _load(config)
+    memory = Memory(cfg, store)  # the embedding model loads lazily (first search / background indexing)
     talker = Talker(cfg, store) if cfg.talk_provider != "none" else None
-    w = Worker(store, Transcriber(cfg), talker) if worker else None
+    w = Worker(store, Transcriber(cfg), talker, memory) if worker else None
     app_ = create_app(cfg, store, on_stored=w.enqueue if w else (lambda _id: None),
                       lifespan=serve_lifespan(cfg, w, advertise=mdns))
-    mount_ui(app_, cfg, store, w.enqueue if w else None, tts=talker.tts if talker else None)
+    mount_ui(app_, cfg, store, w.enqueue if w else None, tts=talker.tts if talker else None, memory=memory)
     typer.echo(f"Orbit Notes '{cfg.name}' on {cfg.host}:{cfg.port}  config={cfg.path}  data={cfg.data_dir}")
     typer.echo(f"UI (this computer only): http://localhost:{cfg.port}/ui/")
     uvicorn.run(app_, host=cfg.host, port=cfg.port)
@@ -101,6 +103,50 @@ def diary(day: Annotated[Optional[str], typer.Argument(help="Local date, YYYY-MM
     cfg, store = _load(config)
     page = diary_mod.build(cfg, store, d)
     typer.echo(f"Wrote {page}")
+
+
+memory_app = typer.Typer(no_args_is_help=True, help="Memory & recall: episodic index and facts (docs/memory.md).")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("backfill")
+def memory_backfill(config: ConfigOpt = None,
+                    threads: int = typer.Option(4, help="CPU threads for the embedding model")):
+    """Index the whole archive (text + vectors). Incremental: unchanged notes are skipped."""
+    import time
+
+    from .memory import E5Embedder, Memory
+
+    cfg, store = _load(config)
+    mem = Memory(cfg, store)
+    if isinstance(mem.embedder, E5Embedder):
+        mem.embedder.threads = threads
+    t = time.monotonic()
+    n = mem.sync(progress=typer.echo)
+    typer.echo(f"text: {n} source(s) (re)indexed in {time.monotonic() - t:.1f}s")
+    t2 = time.monotonic()
+    if mem.embedder:
+        mem.embedder.load()
+        t3 = time.monotonic()
+        e = mem.embed_pending(batch=64)
+        typer.echo(f"vectors: model load {t3 - t2:.1f}s, {e} chunk(s) embedded in {time.monotonic() - t3:.1f}s")
+    typer.echo(json.dumps(mem.stats(), indent=1))
+
+
+@memory_app.command("search")
+def memory_search(query: str, config: ConfigOpt = None, limit: int = 8,
+                  date_from: Annotated[Optional[str], typer.Option("--from")] = None,
+                  date_to: Annotated[Optional[str], typer.Option("--to")] = None):
+    """Hybrid search (keyword + meaning) over the episodic index."""
+    from .memory import Memory
+
+    cfg, store = _load(config)
+    mem = Memory(cfg, store)
+    a = date.fromisoformat(date_from) if date_from else None
+    b = date.fromisoformat(date_to) if date_to else None
+    for h in mem.search(query, limit=limit, date_from=a, date_to=b):
+        sim = f"{h.sim:.3f}" if h.sim is not None else "  -  "
+        typer.echo(f"{h.score:.4f} sim {sim}{' kw' if h.keyword else '   '}  {h.when()}  {h.label()}: {h.text[:160]}")
 
 
 def main() -> None:

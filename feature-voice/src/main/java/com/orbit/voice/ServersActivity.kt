@@ -98,7 +98,7 @@ class ServersActivity : ComponentActivity() {
                     pairedHost = pairedHost,
                     others = others,
                     update = update,
-                    onRefresh = ::refresh,
+                    onRefresh = { refresh(byUser = true) },
                     onScanQr = ::startQrScan,
                     onUpdate = { startActivity(Intent(this, UpdateActivity::class.java)) },
                 )
@@ -134,7 +134,8 @@ class ServersActivity : ComponentActivity() {
         refresh()
     }
 
-    private fun refresh() {
+    /** [byUser]: the paired row was tapped — also check for an app update now, past the 30-min limit. */
+    private fun refresh(byUser: Boolean = false) {
         lifecycleScope.launch {
             val wifi = WifiNow.read(this@ServersActivity)
             if (wifi == null) {
@@ -161,7 +162,7 @@ class ServersActivity : ComponentActivity() {
             status = "Home Wi-Fi · ${listOfNotNull(found.first).size + found.second.size} found"
             if (pairedHost != null) {
                 Uploads.kick(this@ServersActivity, fresh = true)
-                AppUpdates.checkSoon(this@ServersActivity) // companion just answered: a cheap moment
+                AppUpdates.checkSoon(this@ServersActivity, force = byUser) // companion just answered: a cheap moment
             }
         }
     }

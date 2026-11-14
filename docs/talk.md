@@ -64,3 +64,47 @@ GET /v1/notes/{id}/reply.wav            audio/wav (Piper output, mono)
 - Sidecar `mode: "talk"` — `NoteStore.finalize` gets an optional mode; `NoteMeta.mode: String? = null`.
 - Reply playback with `MediaPlayer` from the companion (bearer header), last known IP from
   `ServerPrefs`, bound to the Wi-Fi network.
+
+## Conversations & history (continue where you left off)
+
+Opening Talk shows the latest conversation and talking continues it. Codex keeps one session per
+**conversation** (not per day): a conversation continues until the user starts a new one, across
+midnight too. Diary grouping is unchanged (by the note's local date).
+
+### Sidecar
+- `"mode": "talk"` as before.
+- `"conversation": "new"` (optional) on the first turn after the user tapped **New** — the companion
+  starts a new conversation (new Codex session) with this turn. Absent → continue the latest one.
+
+### API (bearer)
+```
+GET /v1/talk/history?limit=20
+  200 {
+    "conversation": "c-…" | null,            # id of the latest conversation (null = none yet)
+    "turns": [                               # that conversation, oldest → newest (≤ limit, newest kept)
+      { "id": "<note id>", "started_at": "2026-11-14T21:22:42+07:00",
+        "transcript": "…" | null,            # null while not transcribed yet
+        "status": "queued|transcribing|thinking|speaking|done|error",
+        "reply": "…" | null, "error": "…" | null,
+        "audio": "/v1/notes/<id>/reply.wav" | null }
+    ]
+  }
+```
+`/v1/notes/{id}/reply` and `/reply.wav` are unchanged.
+
+### Watch
+- **On open**: show the locally cached conversation immediately, then refresh from
+  `/v1/talk/history` when the companion is reachable (merge by note id; the server is the
+  source of truth for transcript/reply/status).
+- **Layout**: scrollable history (crown + drag), newest at the bottom, auto-scrolled to the end;
+  each turn = your words (2 lines max, muted) and the reply (full text, ink) with a ▶ button
+  that replays its audio. Below the history: the big talk button ("Tap to talk"); a small
+  **New** button starts a fresh conversation (clears the view; the next turn's sidecar carries
+  `"conversation": "new"`).
+- **Local cache**: when a reply arrives, keep its text and audio on the watch
+  (`files/talk/<stem>.reply.json`, `<stem>.reply.wav`, internal storage — not the notes folder,
+  so the notes folder stays audio + sidecars only) plus a small `files/talk/conversation.json`
+  (current conversation id + ordered note stems). Replays use the cached audio, so they work
+  away from home. Keep the last 50 turns; delete older cached replies (never the notes themselves).
+- A turn recorded away from home shows as "Saved — feedback when you're home" in the history and
+  fills in once the reply exists.

@@ -222,7 +222,7 @@ fun QuickSettingsScreen(nav: LauncherNav, env: LauncherEnv) {
         }
 
         Column(
-            Modifier.offset(130.dp, 152.dp).width(140.dp),
+            Modifier.offset(130.dp, 136.dp).width(140.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
@@ -238,7 +238,7 @@ fun QuickSettingsScreen(nav: LauncherNav, env: LauncherEnv) {
                 h ?: s?.let { QuickLogic.status(it.dnd, it.wifiConnected, it.lte, it.simAbsent) } ?: " ",
                 style = text(12, FontWeight.SemiBold, if (h != null) OrbitColors.Rec else Accent, lineHeight = 15)
                     .copy(letterSpacing = 0.06.em, textAlign = TextAlign.Center),
-                maxLines = 2,
+                maxLines = 1,
             )
         }
 
@@ -265,7 +265,7 @@ private val Ink = OrbitColors.Ink
 private fun DiaryPill(count: Int, onClick: () -> Unit) {
     Row(
         Modifier
-            .offset(136.dp, 242.dp)
+            .offset(136.dp, 246.dp)
             .size(128.dp, 40.dp)
             .clip(RoundedCornerShape(50))
             .background(ToggleOff)

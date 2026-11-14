@@ -1,0 +1,23 @@
+{
+  "id": "analog", "name": "Analog", "size": 400,
+  "theme": { "bg": "#000000", "ink": "#F2F1EC", "muted": "#9A9A94", "accent": "#FFB547" },
+  "layers": [
+    { "type": "ticks", "count": 60, "r": 186, "len": 8, "width": 1.4, "color": "#3A3A37",
+      "major": 5, "majorLen": 16, "majorWidth": 3.3, "majorColor": "ink" },
+    { "type": "text", "text": "12", "x": 200, "y": 60, "size": 30, "weight": 600, "font": "grotesk", "color": "ink" },
+    { "type": "circle", "x": 118, "y": 200, "r": 36, "fill": "#121211" },
+    { "type": "circle", "x": 282, "y": 200, "r": 36, "fill": "#121211" },
+    { "type": "circle", "x": 200, "y": 286, "r": 36, "fill": "#121211" },
+    { "type": "circle", "x": 200, "y": 286, "r": 30, "width": 4, "start": -90, "sweep": 360,
+      "track": "#262624", "color": "accent", "value": "{battery.progress}" },
+    { "type": "text", "text": "{battery.level}%", "x": 200, "y": 286, "size": 16, "weight": 600, "font": "grotesk", "color": "ink" },
+    { "type": "complication", "slot": 1, "x": 118, "y": 200, "default": "weather", "style": "bare" },
+    { "type": "complication", "slot": 2, "x": 282, "y": 200, "default": "date", "style": "bare" },
+    { "type": "hands", "hand": "hour", "len": 88, "tail": 14, "width": 9, "color": "ink" },
+    { "type": "hands", "hand": "minute", "len": 152, "tail": 16, "width": 6, "color": "ink" },
+    { "type": "hands", "hand": "second", "len": 166, "tail": 32, "width": 2.5, "color": "accent" },
+    { "type": "dot", "r": 7, "color": "accent" },
+    { "type": "dot", "r": 2.5, "color": "#000000" }
+  ],
+  "tweaks": { "accent": ["#FFB547", "#5CD6E0", "#B9F26B"] }
+}

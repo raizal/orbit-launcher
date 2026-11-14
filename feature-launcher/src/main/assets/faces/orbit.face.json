@@ -1,0 +1,20 @@
+{
+  "id": "orbit", "name": "Orbit", "size": 400,
+  "theme": { "bg": "#000000", "ink": "#F2F1EC", "muted": "#9A9A94", "accent": "#FFB547" },
+  "layers": [
+    { "type": "ticks", "count": 60, "r": 176, "len": 5, "width": 1.2, "color": "#4A4A46",
+      "major": 5, "majorLen": 10, "majorWidth": 2.7, "majorColor": "muted" },
+    { "type": "arc", "r": 188, "start": 135, "sweep": 270, "width": 8,
+      "track": "#1E1E1C", "color": "accent", "value": "{day.progress}" },
+    { "type": "text", "text": "{date.EEE} {date.d}", "upper": true, "x": 200, "y": 117,
+      "size": 20, "weight": 500, "font": "grotesk", "spacing": 0.12, "color": "muted" },
+    { "type": "text", "text": "{time.HH}:{time.mm}", "x": 190, "y": 190,
+      "size": 108, "weight": 600, "font": "grotesk", "spacing": -0.03, "color": "ink" },
+    { "type": "text", "text": "{time.ss}", "x": 340, "y": 214,
+      "size": 20, "weight": 500, "font": "grotesk", "color": "accent" },
+    { "type": "complication", "slot": 1, "x": 128, "y": 286, "default": "weather" },
+    { "type": "complication", "slot": 2, "x": 200, "y": 286, "default": "voice_note" },
+    { "type": "complication", "slot": 3, "x": 272, "y": 286, "default": "battery" }
+  ],
+  "tweaks": { "accent": ["#FFB547", "#5CD6E0", "#B9F26B"] }
+}

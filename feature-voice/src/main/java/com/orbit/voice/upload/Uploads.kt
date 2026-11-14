@@ -19,6 +19,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.orbit.voice.NoteStore
+import com.orbit.voice.update.AppUpdates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -148,6 +149,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 Progress.changed()
             }
         }
+        AppUpdates.checkSoon(applicationContext) // a cheap moment: on home Wi-Fi, companion just answered
         if (transient) Result.retry() else Result.success()
     }
 

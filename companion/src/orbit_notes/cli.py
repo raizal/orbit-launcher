@@ -103,5 +103,25 @@ def diary(day: Annotated[Optional[str], typer.Argument(help="Local date, YYYY-MM
     typer.echo(f"Wrote {page}")
 
 
+@app.command("publish-apk")
+def publish_apk(apk: Annotated[Path, typer.Argument(help="Release APK, e.g. app/build/outputs/apk/release/app-release.apk")],
+                config: ConfigOpt = None,
+                version_code: Annotated[Optional[int], typer.Option(help="Default: from output-metadata.json next to the APK")] = None,
+                version_name: Annotated[Optional[str], typer.Option(help="Default: from output-metadata.json next to the APK")] = None,
+                force: bool = typer.Option(False, "--force", help="Replace even if the versionCode is not higher")):
+    """Publish an Orbit build for the watch to update itself over Wi-Fi (docs/companion.md -> App updates)."""
+    from . import appupdate
+
+    cfg = config_mod.load(config)
+    try:
+        rel = appupdate.publish(cfg.data_dir, apk.expanduser(), version_code, version_name, force=force)
+    except appupdate.PublishError as e:
+        typer.echo(f"Not published: {e}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"Published Orbit {rel.version_name} (versionCode {rel.version_code}, {rel.size} bytes, sha256 {rel.sha256[:12]}…)")
+    typer.echo(f"→ {appupdate.app_dir(cfg.data_dir) / rel.file}. The watch offers it at its next check (home Wi-Fi connect, "
+               "after uploads, or every 6 h; Servers screen → refresh checks now).")
+
+
 def main() -> None:
     app()

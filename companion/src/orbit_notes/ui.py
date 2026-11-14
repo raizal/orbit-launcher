@@ -19,7 +19,7 @@ from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import actions, diary
+from . import actions, appupdate, diary
 from .config import Config
 from .store import Note, Store
 from .talk import PERSONA, reply_paths
@@ -97,6 +97,7 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
             "llm_provider": cfg.llm_provider,
             "diary_dir": str(cfg.diary_dir),
             "vault_dir": str(cfg.vault_dir) if cfg.vault_dir else None,
+            "app": (rel := appupdate.latest(cfg.data_dir)) and rel.public(),  # published watch build, or null
         }
 
     @api.get("/days")

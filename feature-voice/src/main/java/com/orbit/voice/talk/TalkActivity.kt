@@ -27,6 +27,8 @@ import com.orbit.voice.RecorderState
 import com.orbit.voice.RecorderUi
 import com.orbit.voice.TICKS
 import com.orbit.voice.VoiceEntry
+import com.orbit.voice.update.Installer
+import com.orbit.voice.update.UpdateLogic
 import com.orbit.voice.upload.Discovery
 import com.orbit.voice.upload.NoteState
 import com.orbit.voice.upload.OrbitClient
@@ -128,6 +130,8 @@ class TalkActivity : ComponentActivity() {
         // ≤ 50 small JSON files: read them now so the conversation is there on the first frame.
         history = cache.load()
         ContextCompat.registerReceiver(this, receiver, IntentFilter(RecorderState.ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
+        // An app update must not cut off a turn or a reply being played (docs/voice-notes.md → App updates).
+        Installer.registerTalk(this) { UpdateLogic.talkBlocks(ui) || player != null || playingStem != null }
         setContent {
             RoundScreen {
                 TalkScreen(
@@ -182,6 +186,7 @@ class TalkActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        Installer.unregisterTalk(this)
         unregisterReceiver(receiver)
         handler.removeCallbacks(releaseScreen)
         releasePlayer()

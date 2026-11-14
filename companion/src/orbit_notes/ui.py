@@ -21,6 +21,7 @@ from .config import Config
 from .store import Note, Store
 
 WEB_DIR = Path(__file__).parent / "web"  # built by `npm run build` in companion/web
+AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav"}
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
@@ -65,6 +66,7 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
             "whisper_model": cfg.whisper_model,
             "llm_provider": cfg.llm_provider,
             "diary_dir": str(cfg.diary_dir),
+            "vault_dir": str(cfg.vault_dir) if cfg.vault_dir else None,
         }
 
     @api.get("/days")
@@ -104,6 +106,17 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
         except Exception as e:  # LLM errors etc. — show them in the UI
             raise HTTPException(500, f"diary build failed: {e}") from e
         return {"path": str(page), "markdown": page.read_text()}
+
+    @api.get("/vault/{rel:path}")
+    def vault_audio(rel: str):
+        """Audio embedded in a diary page (`![[Diary/audio/x.m4a]]`), resolved inside the vault only."""
+        if not cfg.vault_dir or Path(rel).suffix.lower() not in AUDIO_TYPES:
+            _404()
+        root = cfg.vault_dir.resolve()
+        path = (root / rel).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            _404()
+        return FileResponse(path, media_type=AUDIO_TYPES[path.suffix.lower()])
 
     @api.get("/pairing.png")
     def pairing_png():

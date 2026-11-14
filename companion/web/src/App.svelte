@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api, fmtDay, fmtDuration, todayIso } from './api.js'
+  import { renderDiary } from './markdown.js'
 
   let status = $state(null)
   let days = $state([])
@@ -9,6 +10,8 @@
   let diary = $state(null) // { path, markdown }
   let building = $state(false)
   let showPair = $state(false)
+  let showSource = $state(false)
+  const page = $derived(diary?.markdown ? renderDiary(diary.markdown) : null)
   let error = $state('')
 
   const waiting = $derived(notes.filter((n) => n.transcript_status !== 'done' && n.transcript_status !== 'error').length)
@@ -136,9 +139,21 @@
         {building ? 'Building…' : diary?.markdown ? 'Rebuild' : 'Build'}
       </button>
     </div>
-    {#if diary?.markdown}
-      <p class="muted path">{diary.path}</p>
-      <pre>{diary.markdown}</pre>
+    {#if page}
+      <p class="muted path">
+        {diary.path}
+        <button class="small" onclick={() => (showSource = !showSource)}>{showSource ? 'Rendered' : 'Source'}</button>
+      </p>
+      {#if showSource}
+        <pre>{diary.markdown}</pre>
+      {:else}
+        {#if page.meta.length}
+          <dl class="meta">
+            {#each page.meta as m}<dt>{m.key}</dt><dd>{m.value}</dd>{/each}
+          </dl>
+        {/if}
+        <div class="md">{@html page.html}</div>
+      {/if}
     {:else}
       <p class="muted">No page for this day yet.</p>
     {/if}
@@ -200,6 +215,23 @@
   .diary-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .path { font-size: 12px; word-break: break-all; }
   pre { white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font-size: 12.5px; line-height: 1.5; }
+
+  .path { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 12px; padding: 8px 12px; font-size: 12px; border: 1px solid var(--line); border-radius: 10px; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; }
+  .md { line-height: 1.55; font-size: 14px; }
+  .md :global(h1) { font-family: 'Space Grotesk', Inter, sans-serif; font-size: 22px; margin: 4px 0 10px; }
+  .md :global(h2) { font-size: 16px; margin: 20px 0 8px; color: var(--accent); }
+  .md :global(ul) { padding-left: 18px; }
+  .md :global(li) { margin: 6px 0; }
+  .md :global(li audio) { display: block; width: 100%; height: 32px; margin: 4px 0; }
+  .md :global(em) { color: var(--muted); }
+  .md :global(code) { background: var(--surface); padding: 1px 5px; border-radius: 5px; font-size: 12.5px; }
+  .md :global(.wikilink) { color: var(--info); }
+  .md :global(details.callout) { border-left: 3px solid var(--line); background: var(--surface-2); border-radius: 6px; padding: 6px 12px; margin: 8px 0; }
+  .md :global(details.callout summary) { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .md :global(details.callout p) { margin: 6px 0 2px; }
 
   .modal { position: fixed; inset: 0; background: rgb(0 0 0 / 0.7); display: grid; place-items: center; z-index: 2; }
   .card { background: var(--surface); border-radius: 18px; padding: 24px; max-width: 360px; text-align: center; }

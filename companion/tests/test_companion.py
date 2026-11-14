@@ -343,3 +343,16 @@ def test_ui_is_local_only(client, store, cfg):
     # The watch API stays reachable from the LAN.
     assert lan.get("/v1/health", params={"nonce": "n"}).status_code == 200
     assert ui_client(cfg, store).get("/ui/api/pairing.png").headers["content-type"] == "image/png"
+
+
+def test_ui_serves_vault_audio_only_inside_vault(client, store, cfg, tmp_path):
+    cfg.vault_dir = tmp_path / "vault"
+    (cfg.vault_dir / "Diary/audio").mkdir(parents=True)
+    (cfg.vault_dir / "Diary/audio/a.m4a").write_bytes(b"m4a")
+    (cfg.vault_dir / "secret.md").write_text("private")
+    (tmp_path / "outside.m4a").write_bytes(b"x")
+    ui = ui_client(cfg, store)
+    r = ui.get("/ui/api/vault/Diary/audio/a.m4a")
+    assert r.status_code == 200 and r.content == b"m4a" and r.headers["content-type"] == "audio/mp4"
+    assert ui.get("/ui/api/vault/secret.md").status_code == 404  # not audio
+    assert ui.get("/ui/api/vault/..%2Foutside.m4a").status_code == 404  # escapes the vault

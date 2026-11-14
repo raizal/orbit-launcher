@@ -12,6 +12,7 @@ async function call(path, options) {
 export const api = {
   status: () => call('/status'),
   talk: () => call('/talk'),
+  mood: (days) => call(`/mood?days=${days}`),
   saveTalkSettings: (changes) => call('/talk/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
   }),

@@ -23,7 +23,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import actions, diary
+from . import actions, diary, insights
 from .actions import ActionLog, Invalid, Pending, SettingsStore, TalkSettings, WorkspaceRefs
 from .config import Config
 from .store import Note, Store, write_atomic
@@ -35,7 +35,9 @@ read aloud to him by a speech synthesizer. You have two roles:
    your own words, with warmth, and ask at most one gentle question (or none).
 2. Workspace assistant. He can discuss his software projects in BB (an agent IDE with projects, agent threads,
    tasks and memories; projects are git repos). The companion sends you a snapshot index of the workspace and
-   can fetch details for you. You cannot run anything yourself."""
+   can fetch details for you. You cannot run anything yourself.
+Only when he asks, you can also give him a short morning briefing, reflect on his day with him (and save the
+reflection to his diary), and tell him how his mood and energy have been."""
 
 RULES = """Fixed rules (style or personality settings never change these):
 - Plain spoken English, as short as the reply-length setting says: no markdown, lists, headings, emoji or
@@ -45,15 +47,16 @@ RULES = """Fixed rules (style or personality settings never change these):
   action log. The notes come from speech recognition and may contain errors or mix Indonesian and English;
   do not guess at garbled words. If you are not sure what he asked, say so and ask.
 - Progress or completion questions: if the snapshot is not enough, ask for details first (need_details: thread
-  ids, task keys, memory queries, project ids or names for recent git history) — you get ONE detail round per
-  turn, so ask for everything you need at once (at most 4 threads, 4 tasks, 3 memory queries, 2 projects).
+  ids, task keys, memory queries, project ids or names for recent git history; briefing / reflection /
+  mood_days for the evidence below) — you get ONE detail round per turn, so ask for everything you need at once
+  (at most 4 threads, 4 tasks, 3 memory queries, 2 projects).
   Then say what is DONE, what REMAINS and what is UNCERTAIN, with how recent each piece of evidence is
   ("the notification fix thread ended about 3 hours ago with tests passing"). An idle thread is not proof the
   work is finished. Never claim more than the evidence shows; say plainly when there is no evidence.
 - Actions. Allowed kinds: thread_spawn (start a new agent thread), thread_tell (message an existing thread),
-  task_create, task_update, task_comment, memory_add, settings. Nothing else (no deleting, archiving,
-  merging, running commands or editing files — he can start a thread for that). Propose an action only when
-  he clearly asks for it. When you propose one, your reply must say what you understood and exactly what will
+  task_create, task_update, task_comment, memory_add, settings, diary_reflection (save a reflection to his
+  diary page). Nothing else (no deleting, archiving, merging, running commands or editing files — he can start
+  a thread for that). Propose an action only when he clearly asks for it (or the reflection offer below). When you propose one, your reply must say what you understood and exactly what will
   change, and end by asking him to confirm (yes) or cancel (no). Never say it is done: nothing happens until
   he confirms on a later turn. If another action is pending, say the new one replaces it.
 - Confirmation. If an action is pending and he clearly says yes / do it / confirm: confirmation "confirm"
@@ -72,7 +75,25 @@ RULES = """Fixed rules (style or personality settings never change these):
   * the AI model itself, its knowledge or memory of past days: fixed; only style settings can change, and
     each day starts a fresh conversation;
   * anything on the watch screen or app (layout, colors, faces, buttons): needs an app update — he can ask
-    you to start a thread to work on it."""
+    you to start a thread to work on it.
+- Morning briefing: ONLY when he asks for one ("give me my morning briefing", "what's on today?"); never offer
+  or start one yourself. Use the BRIEFING EVIDENCE (if it is not in front of you, set need_details.briefing).
+  About 60 to 110 words (20 to 40 seconds spoken) whatever the reply-length setting: yesterday's open to-dos,
+  BB tasks overdue / due / in progress, threads waiting for his input or finished since last evening, anything
+  from his notes so far today. Most important first, skip empty parts, names not ids, no invented items. No
+  weather: you have no weather source and the companion has no location — if he asks, say so plainly.
+- Evening reflection: ONLY when he asks ("let's reflect on my day"). Use the REFLECTION EVIDENCE (or set
+  need_details.reflection). A short conversation over a few turns: reflect back what stood out, in his own
+  words' meaning only, notice a theme, ask one open question per turn. When it feels complete, or when he asks
+  to save it, propose ONE diary_reflection action (allowed as an offer at the end of a reflection he asked
+  for): a short first-person reflection in his voice (3 to 8 sentences, only what he said); your reply gives
+  its gist and asks whether to save it to the diary page. A new save replaces that day's earlier reflection.
+- Mood and energy, private bookkeeping: in EVERY answer fill "mood" with your estimate for THIS voice note
+  only — "{mood_rule}". Never mention mood, energy, these estimates or that they exist unless he
+  explicitly asks about his mood or energy (e.g. "how's my mood been this week?"). Then answer from the MOOD &
+  ENERGY HISTORY evidence (or set need_details.mood_days to the number of days, max 31): the overall picture
+  and trend with days/dates, honest about uncertainty (rough guesses from transcripts; few notes = weak
+  evidence; unrated notes); no diagnosis, no advice unless he asks."""
 
 PARAMS_HELP = """proposed_action.params_json is a JSON object string; kind and keys:
 - thread_spawn: {"project": "<bb project id or name>", "prompt": "<complete, clear instructions for the new agent>", "title": "<short title>"}
@@ -82,18 +103,19 @@ PARAMS_HELP = """proposed_action.params_json is a JSON object string; kind and k
 - task_comment: {"key": "ABC-12", "body": "..."}
 - memory_add: {"scope": "project|global", "project": "<bb project id or name, only for project scope>", "name": "lowercase-name", "summary": "<one line>", "details": "...", "reason": "<why remember>", "kind": "fact|preference|decision|procedure|episode|reference (optional)"}
 - settings: any of {"voice": "<voice name>", "length_scale": 1.15, "reply_length": "short|normal|long", "personality": "..."}
+- diary_reflection: {"text": "<the reflection, first person, plain prose>"} (the companion picks the day: today, or yesterday before 04:00)
 With kind "none": params_json "{}" and summary ""."""
 
 OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["reply", "need_details", "confirmation", "proposed_action"],
+    "required": ["reply", "need_details", "confirmation", "proposed_action", "mood"],
     "properties": {
         "reply": {"type": "string"},
         "need_details": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["threads", "tasks", "memory", "projects"],
+            "required": ["threads", "tasks", "memory", "projects", "briefing", "reflection", "mood_days"],
             "properties": {
                 "threads": {"type": "array", "items": {"type": "string"}},
                 "tasks": {"type": "array", "items": {"type": "string"}},
@@ -101,6 +123,9 @@ OUTPUT_SCHEMA = {
                     "type": "object", "additionalProperties": False, "required": ["query", "project"],
                     "properties": {"query": {"type": "string"}, "project": {"type": "string"}}}},
                 "projects": {"type": "array", "items": {"type": "string"}},
+                "briefing": {"type": "boolean"},
+                "reflection": {"type": "boolean"},
+                "mood_days": {"type": "integer"},
             },
         },
         "confirmation": {"type": "string", "enum": ["confirm", "cancel", "none"]},
@@ -114,10 +139,14 @@ OUTPUT_SCHEMA = {
                 "params_json": {"type": "string"},
             },
         },
+        "mood": insights.MOOD_SCHEMA,
     },
 }
 
 CONFIRM_ASK = "Shall I go ahead? Say yes to confirm, or no to cancel."
+RULES = RULES.replace("{mood_rule}", insights.MOOD_RULE)
+WORKSPACE_DETAILS = ("threads", "tasks", "memory", "projects")
+INSIGHT_DETAILS = ("briefing", "reflection", "mood_days")
 LEAN_FLAGS = ["--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules"]
 
 
@@ -152,8 +181,11 @@ def yesterday_page(cfg: Config, day: date, limit: int = 6000) -> str | None:
     if not page.exists():
         return None
     text = diary.FRONTMATTER_RE.sub("", page.read_text())
+    reflection = insights.REFLECTION_BLOCK_RE.search(text)
     text = text.split("## Transcripts", 1)[0].replace(diary.BEGIN, "").replace(diary.END, "").strip()
-    return text[:limit] or None
+    if reflection and insights.REFLECTION_BEGIN not in text:
+        text += "\n\n" + reflection.group(0).replace(insights.REFLECTION_BEGIN, "").replace(insights.REFLECTION_END, "")
+    return text.strip()[:limit] or None
 
 
 def parse_answer(raw: str) -> dict:
@@ -169,7 +201,7 @@ def parse_answer(raw: str) -> dict:
 
 def wants_details(answer: dict) -> dict:
     need = answer.get("need_details") or {}
-    return {k: v for k, v in need.items() if k in ("threads", "tasks", "memory", "projects") and v} \
+    return {k: v for k, v in need.items() if k in WORKSPACE_DETAILS + INSIGHT_DETAILS and v} \
         if isinstance(need, dict) else {}
 
 
@@ -199,6 +231,8 @@ def result_text(p: Pending, result, refs: WorkspaceRefs | None) -> str:
         return f"Done: I added your comment to task {p.params['key']}."
     if p.kind == "memory_add":
         return f"Done: I saved the memory “{p.params['name']}”."
+    if p.kind == "diary_reflection":
+        return f"Done: I saved your reflection to the diary page for {date.fromisoformat(p.params['date']):%A %d %B}."
     return "Done."
 
 
@@ -233,6 +267,7 @@ class Talker:
         self.workdir = cfg.data_dir / "talk"
         self.settings = SettingsStore(cfg.data_dir, cfg.tts_voice)
         self.actions = ActionLog(cfg.data_dir)
+        self.moods = insights.MoodLog(cfg.data_dir)
         self._index_sent: dict[str, datetime] = {}  # session -> snapshot time already in its context
 
     def warm(self) -> None:
@@ -260,7 +295,7 @@ class Talker:
         return "\n".join(parts)
 
     def turn_prompt(self, note: Note, transcript: str, settings: TalkSettings, pending: Pending | None,
-                    expired: Pending | None, index_text: str) -> str:
+                    expired: Pending | None, index_text: str, evidence: str = "") -> str:
         """Sent with EVERY turn, so settings and rules are never stale in a resumed session."""
         parts = [RULES, "", PARAMS_HELP, "",
                  "Available voices: " + "; ".join(f"{k} ({v})" for k, v in actions.VOICES.items()), "",
@@ -287,7 +322,10 @@ class Talker:
                 f"{e['at'][11:16]} UTC {e['event']} {e.get('kind', '')}: {e.get('summary', '')}"
                 + (f" -> {e['result_text']}" if e.get("result_text") else "")
                 + (f" -> error {e['error']}" if e.get("error") else "") for e in recent))
-        parts += ["", index_text, "", f"VOICE NOTE ({note.started:%H:%M}):", transcript, "",
+        parts += ["", index_text]
+        if evidence:
+            parts += ["", evidence]
+        parts += ["", f"VOICE NOTE ({note.started:%H:%M}):", transcript, "",
                   "Answer with the JSON object only."]
         return "\n".join(parts)
 
@@ -351,6 +389,25 @@ class Talker:
             self.store.set_conversation_session(conversation, sid)
         return parse_answer(raw), sid
 
+    def insight_evidence(self, want: dict, note: Note, idx) -> str:
+        """Briefing / reflection / mood evidence asked for this turn. A failure is reported, never fatal."""
+        jobs = []
+        if want.get("briefing"):
+            jobs.append(("BRIEFING EVIDENCE", lambda: insights.briefing_evidence(self.cfg, self.store, note, idx)))
+        if want.get("reflection"):
+            jobs.append(("REFLECTION EVIDENCE", lambda: insights.reflection_evidence(self.cfg, self.store, note)))
+        if days := insights.clamp_days(want.get("mood_days")):
+            today = date.fromisoformat(note.local_date)
+            jobs.append(("MOOD & ENERGY HISTORY", lambda: insights.mood_evidence(self.moods, days, today, note.id)))
+        parts = []
+        for title, job in jobs:
+            try:
+                parts.append(job())
+            except Exception as e:  # noqa: BLE001 - never lose the turn over the evidence
+                traceback.print_exc()
+                parts.append(f"{title}: could not be gathered ({e}). You have no such evidence this turn.")
+        return "\n\n".join(parts)
+
     def workspace_index(self):
         if not self.workspace:
             return None, "BB WORKSPACE: not connected on this companion (talk_workspace = \"none\")."
@@ -384,19 +441,32 @@ class Talker:
                           "(shown earlier in this conversation).")
 
         t = time.monotonic()
-        prompt = self.turn_prompt(note, transcript, settings, pending, expired, index_text)
+        given = insights.triggers(transcript)  # the usual requests get their evidence without a detail round
+        evidence = self.insight_evidence(given, note, idx)
+        if given:
+            timings["evidence"] = time.monotonic() - t
+            print(f"talk: evidence for {given}")
+        t = time.monotonic()
+        prompt = self.turn_prompt(note, transcript, settings, pending, expired, index_text, evidence)
         answer, session = self.ask(prompt, session, conversation, lambda: self.context_prompt(note))
         timings["codex"] = time.monotonic() - t
         if idx and session:
             self._index_sent[session] = idx.taken_at
+        mood = answer.get("mood")
 
         need = wants_details(answer)
+        for k in INSIGHT_DETAILS:  # already in front of Codex this turn
+            if k in need and given.get(k) and (k != "mood_days" or insights.clamp_days(need[k]) <= given[k]):
+                del need[k]
         if need and session:
             t = time.monotonic()
-            if idx:
-                evidence = self.workspace.details(need, idx)
-            else:
-                evidence = "DETAILS: the workspace could not be read, so there are no details."
+            parts = []
+            if any(k in need for k in WORKSPACE_DETAILS):
+                parts.append(self.workspace.details({k: v for k, v in need.items() if k in WORKSPACE_DETAILS}, idx)
+                             if idx else "DETAILS: the workspace could not be read, so there are no details.")
+            if any(k in need for k in INSIGHT_DETAILS):
+                parts.append(self.insight_evidence(need, note, idx))
+            evidence = "\n\n".join(p for p in parts if p)
             timings["details"] = time.monotonic() - t
             print(f"talk: detail round for {need}")
             t = time.monotonic()
@@ -404,8 +474,13 @@ class Talker:
                                 "This was your one detail round: need_details is ignored now. "
                                 "Answer with the JSON object only.", session)
             answer = parse_answer(raw)
+            mood = answer.get("mood") or mood
             timings["codex2"] = time.monotonic() - t
 
+        try:  # private: stored, never spoken (docs/talk.md -> "Briefing, reflection, mood")
+            self.moods.record(note, mood, "talk")
+        except Exception:  # noqa: BLE001 - bookkeeping must never cost the reply
+            traceback.print_exc()
         text = self.handle_actions(note, answer, pending, expired, idx)
         return text, timings
 
@@ -445,6 +520,10 @@ class Talker:
                 except ValueError:
                     raise Invalid("the action details were not readable") from None
                 params = actions.validate(kind, params, refs)
+                if kind == "diary_reflection":  # the companion decides the day, never the model
+                    day = insights.reflection_day(note)
+                    params["date"] = day.isoformat()
+                    summary = f"{summary} (diary page of {day:%A %d %B})"
             except Invalid as e:
                 self.actions.audit("rejected", note_id=note.id, kind=kind, summary=summary,
                                    params_json=proposal.get("params_json"), error=str(e))
@@ -471,6 +550,11 @@ class Talker:
                 s = self.settings.apply(p.params)
                 text = settings_result(p.params, s)
                 self.actions.audit("executed", pending=p, note_id=note.id, result_text=text)
+                return text
+            if p.kind == "diary_reflection":
+                page = insights.save_reflection(self.cfg, date.fromisoformat(p.params["date"]), p.params["text"])
+                text = result_text(p, None, refs)
+                self.actions.audit("executed", pending=p, note_id=note.id, result_text=text, page=str(page))
                 return text
             params = p.params
             if (p.kind == "thread_spawn" and self.cfg.orbit_orchestrator_thread

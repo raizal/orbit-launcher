@@ -154,7 +154,9 @@ PARAMS = {
     "task_comment": ({"key", "body"}, set()),
     "memory_add": ({"scope", "name", "summary", "details", "reason"}, {"project", "kind"}),
     "settings": (set(), {"voice", "length_scale", "personality", "reply_length"}),
+    "diary_reflection": ({"text"}, set()),  # local: the day is set by the companion (insights.reflection_day)
 }
+REFLECTION_MIN, REFLECTION_MAX = 20, 2000
 KINDS = tuple(PARAMS)
 
 
@@ -268,6 +270,11 @@ def validate(kind: str, params: dict, refs: WorkspaceRefs) -> dict:
             out["kind"] = k
     elif kind == "settings":
         out = validate_settings(params)
+    elif kind == "diary_reflection":
+        text = _text(params, "text", REFLECTION_MAX)
+        if len(text) < REFLECTION_MIN:
+            raise Invalid("the reflection is too short to save")
+        out["text"] = text
     return out
 
 

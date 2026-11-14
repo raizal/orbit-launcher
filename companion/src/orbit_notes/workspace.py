@@ -80,6 +80,8 @@ class Index:
     text: str
     refs: WorkspaceRefs
     errors: list[str] = field(default_factory=list)
+    threads: list[dict] = field(default_factory=list)  # live threads as bb returned them (briefing)
+    tasks: list[dict] = field(default_factory=list)  # every task of every task project (briefing)
 
 
 class Workspace:
@@ -236,7 +238,7 @@ class Workspace:
             lines.append("NOT AVAILABLE in this snapshot (treat as no evidence): " + "; ".join(errors))
         print(f"talk: workspace index {time.monotonic() - t0:.1f}s ({len(live)} threads, {len(tasks)} tasks"
               + (f", errors: {errors}" if errors else "") + ")")
-        return Index(now, "\n".join(lines), refs, errors)
+        return Index(now, "\n".join(lines), refs, errors, threads=live, tasks=tasks)
 
     # --- details (one round per turn) ------------------------------------------------------------
 

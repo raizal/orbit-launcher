@@ -10,6 +10,9 @@
   let diary = $state(null) // { path, markdown }
   let building = $state(false)
   let showPair = $state(false)
+  let showMood = $state(false)
+  let mood = $state(null) // { from, days: [{date, mood, energy, notes, used, low_only}], notes, unrated }
+  let moodDays = $state(30)
   let showSource = $state(false)
   let talk = $state(null) // { workspace, pending, audit, settings, voices }
   let showTalk = $state(false)
@@ -84,6 +87,28 @@
     showTalk = true
   }
 
+  async function openMood() {
+    showMood = true
+    await guard(async () => { mood = await api.mood(moodDays) })
+  }
+
+  // Small line chart geometry: one series per chart (mood and energy have different scales: two charts).
+  const CW = 520, CH = 120, PAD = { l: 30, r: 10, t: 10, b: 22 }
+  function chart(points, key, lo, hi) {
+    if (!mood) return null
+    const start = new Date(`${mood.from}T12:00:00`).getTime()
+    const span = Math.max(1, moodDays - 1) * 86400000
+    const x = (d) => PAD.l + ((new Date(`${d}T12:00:00`).getTime() - start) / span) * (CW - PAD.l - PAD.r)
+    const y = (v) => PAD.t + ((hi - v) / (hi - lo)) * (CH - PAD.t - PAD.b)
+    const pts = points.map((p) => ({ ...p, cx: x(p.date), cy: y(p[key]) }))
+    const ticks = []
+    for (let v = lo; v <= hi; v++) ticks.push({ v, y: y(v) })
+    return { pts, ticks, path: pts.map((p, i) => `${i ? 'L' : 'M'}${p.cx.toFixed(1)},${p.cy.toFixed(1)}`).join(' ') }
+  }
+  const moodChart = $derived(mood ? chart(mood.days, 'mood', -2, 2) : null)
+  const energyChart = $derived(mood ? chart(mood.days, 'energy', 1, 5) : null)
+  let hover = $state(null) // { chart, p }
+
   function closeTalk() {
     stopPreview()
     showTalk = false
@@ -147,7 +172,7 @@
   })
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), closeTalk())} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showMood = false), closeTalk())} />
 
 <header>
   <div class="brand">
@@ -168,6 +193,7 @@
   <button onclick={openTalk}>
     Talk assistant{#if talk?.pending && !talk.pending.expired}<span class="pending-dot" title="An action waits for confirmation"></span>{/if}
   </button>
+  <button onclick={openMood} title="Private: estimates only, never shown on the watch">Mood</button>
   <button onclick={() => (showPair = true)}>Pair watch</button>
 </header>
 
@@ -261,6 +287,65 @@
       <img src={api.pairingUrl()} alt="Pairing QR code" />
       <p class="muted small-print">Contains the server token. Don't share a screenshot.</p>
       <button onclick={() => (showPair = false)}>Close</button>
+    </div>
+  </div>
+{/if}
+
+{#if showMood}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal" role="presentation" onclick={(e) => e.target === e.currentTarget && (showMood = false)}>
+    <div class="card talk-card" role="dialog" aria-modal="true" aria-label="Mood and energy">
+      <h2>Mood &amp; energy <span class="muted">· private</span></h2>
+      <p class="muted">Quiet estimates per transcribed note (talk turns when answered, normal notes when their diary
+        page is built). Rough guesses from words, not measurements. Orbit only mentions them when you ask.
+        Daily values average the medium/high-confidence notes.</p>
+      <div class="row">
+        {#each [7, 30, 90] as n}
+          <button class="small" class:active={moodDays === n} onclick={() => { moodDays = n; openMood() }}>{n} days</button>
+        {/each}
+        {#if mood?.unrated}<span class="muted">{mood.unrated} transcribed note(s) not rated yet</span>{/if}
+      </div>
+      {#if mood && mood.days.length === 0}
+        <p class="muted">No estimates in this range yet.</p>
+      {:else if mood}
+        {#each [{ name: 'Mood (−2 … +2)', c: moodChart, key: 'mood', cls: 'mood-line' }, { name: 'Energy (1 … 5)', c: energyChart, key: 'energy', cls: 'energy-line' }] as g (g.key)}
+          <h3>{g.name}</h3>
+          <svg class="mood-chart" viewBox="0 0 {CW} {CH}" role="img" aria-label="{g.name} per day">
+            {#each g.c.ticks as t}
+              <line x1={PAD.l} x2={CW - PAD.r} y1={t.y} y2={t.y} class="grid" class:zero={g.key === 'mood' && t.v === 0} />
+              <text x={PAD.l - 6} y={t.y + 4} text-anchor="end" class="axis">{g.key === 'mood' && t.v > 0 ? '+' : ''}{t.v}</text>
+            {/each}
+            <text x={PAD.l} y={CH - 4} class="axis">{fmtDay(mood.from)}</text>
+            <text x={CW - PAD.r} y={CH - 4} text-anchor="end" class="axis">today</text>
+            <path d={g.c.path} class={g.cls} />
+            {#each g.c.pts as p}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <circle cx={p.cx} cy={p.cy} r="12" class="hit" onmouseenter={() => (hover = { key: g.key, p })} onmouseleave={() => (hover = null)} />
+              <circle cx={p.cx} cy={p.cy} r={hover?.key === g.key && hover.p.date === p.date ? 6 : 4} class="{g.cls} dot" class:low={p.low_only} />
+            {/each}
+            {#if hover?.key === g.key}
+              {@const tx = Math.min(hover.p.cx + 8, CW - 170)}
+              <rect x={tx} y="2" width="160" height="34" rx="6" class="tip" />
+              <text x={tx + 8} y="16" class="tip-text">{fmtDay(hover.p.date)}</text>
+              <text x={tx + 8} y="30" class="tip-text">{g.key} {hover.p[g.key].toFixed(1)} · {hover.p.used}/{hover.p.notes} notes{hover.p.low_only ? ' · low conf.' : ''}</text>
+            {/if}
+          </svg>
+        {/each}
+        <h3>Per note</h3>
+        <table class="mood-table">
+          <thead><tr><th>When</th><th>Kind</th><th>Mood</th><th>Energy</th><th>Confidence</th><th>Why</th></tr></thead>
+          <tbody>
+            {#each mood.notes as r (r.note_id)}
+              <tr class:low={r.confidence === 'low'}>
+                <td>{fmtTime(r.started_at)}</td><td>{r.mode === 'talk' ? 'talk' : 'note'}</td>
+                <td class="num">{r.mood > 0 ? '+' : ''}{r.mood}</td><td class="num">{r.energy}</td>
+                <td>{r.confidence}</td><td>{r.rationale}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+      <button onclick={() => (showMood = false)}>Close</button>
     </div>
   </div>
 {/if}
@@ -375,6 +460,24 @@
 {/if}
 
 <style>
+  .mood-chart { width: 100%; height: auto; display: block; margin-bottom: 8px; }
+  .mood-chart .grid { stroke: var(--line); stroke-width: 1; }
+  .mood-chart .grid.zero { stroke: var(--muted); }
+  .mood-chart .axis { fill: var(--muted); font-size: 11px; }
+  .mood-chart path { fill: none; stroke-width: 2; }
+  .mood-chart .mood-line { stroke: var(--accent); }
+  .mood-chart .energy-line { stroke: var(--info); }
+  .mood-chart .dot.mood-line { fill: var(--accent); }
+  .mood-chart .dot.energy-line { fill: var(--info); }
+  .mood-chart .dot.low { fill: var(--surface); stroke-width: 2; }
+  .mood-chart .hit { fill: transparent; }
+  .mood-chart .tip { fill: var(--surface); stroke: var(--line); }
+  .mood-chart .tip-text { fill: currentColor; font-size: 11px; }
+  .mood-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
+  .mood-table th, .mood-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .mood-table th { color: var(--muted); font-weight: 500; }
+  .mood-table tr.low td { color: var(--muted); }
+  button.active { border-color: var(--accent); }
   header {
     display: flex; align-items: center; gap: 24px; padding: 16px 28px;
     border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1;

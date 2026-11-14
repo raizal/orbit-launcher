@@ -221,6 +221,59 @@ the file, so either way the very next reply uses the new settings.
   Save = `PUT /ui/api/talk/settings` (same validation as the voice flow; logged as a `changed` audit entry).
   The voice flow itself still only offers the curated list.
 
+### Briefing, reflection, mood (on request only)
+
+Capabilities Talk knows it has (persona + fixed rules sent every turn) but uses **only when Raiz asks**.
+No scheduled briefings, no unprompted offers. Code: `companion/src/orbit_notes/insights.py`; tests:
+`companion/tests/test_insights.py`.
+
+**Evidence, without an extra round when possible.** A cheap regex on the transcript (`insights.triggers`:
+"briefing", "what's on today", "reflect on my day", a *question* about mood/energy) gathers the evidence
+before the first Codex call. Anything the regex misses, Codex asks for in the one detail round:
+`need_details` gains `"briefing": bool, "reflection": bool, "mood_days": int` (0 = none, max 31). Evidence
+already given this turn is not fetched twice. A failure to gather is reported to Codex as "no evidence",
+never fails the turn.
+
+- **Morning briefing** — `BRIEFING EVIDENCE`: weather explicitly *not available* (no location, no source —
+  Codex says so if asked, never guesses); yesterday's open to-dos (unticked `- [ ]` under `## To-dos` on
+  yesterday's diary page — ticking them in Obsidian removes them; no page yet → yesterday's transcripts and
+  Codex picks out clear to-dos); BB tasks overdue / due today / tomorrow / in progress / in review (from the
+  workspace index's raw task list, ≤ 12); BB threads updated since yesterday 18:00 — waiting for input
+  first, then stopped ("agent finished a run; outcome not checked") and still running (≤ 12); today's
+  earlier notes. Spoken length ~60–110 words (20–40 s), whatever the reply-length setting.
+- **Evening reflection** — `REFLECTION EVIDENCE`: all of that day's notes and talk turns (with Orbit's
+  replies), oldest first, ≤ ~9000 chars, plus the reflection already saved that day. A short conversation
+  (one open question per turn); at its natural end, or when asked, Codex proposes **`diary_reflection`**
+  `{"text": "…"}` (20–2000 chars, first person) — a new allowlisted kind in the normal confirm-before-act
+  flow. The **companion** sets the day: the note's local date, or the previous day before 04:00. On "yes":
+  `data_dir/reflections/<date>.md` (companion copy) + a `## Reflection` block between
+  `<!-- orbit:reflection:begin -->` / `<!-- orbit:reflection:end -->` on that diary page, after the orbit
+  block (page created with just frontmatter + the block if it does not exist yet). A new save replaces the
+  day's block. `diary.build` rewrites only its own block and restores the reflection from the companion
+  copy if the page lost it. Result: "Done: I saved your reflection to the diary page for Saturday 14
+  November."
+- **Mood & energy, quietly** — every transcribed note gets `{mood -2..+2, energy 1..5, confidence
+  low|medium|high, rationale}` in the `note_mood` table (`index.sqlite`), at **no extra LLM call**:
+  * talk notes: a required `mood` object in the turn's own Codex JSON (`OUTPUT_SCHEMA`; the final answer's
+    estimate after a detail round) — a few dozen output tokens per turn;
+  * normal notes: `summaries[].mood` in the diary build's existing JSON call (same cost argument). So normal
+    notes are rated when their day's page is built (cron / web UI), not in real time — the evidence says how
+    many transcribed notes are still unrated. Talk estimates are never overwritten by diary ones. A
+    background pass per note would cost one Codex call per note (~10 s of quota each) for little gain.
+  * Never mentioned unless he asks ("how's my mood been this week?"). Then `MOOD & ENERGY HISTORY` (default
+    7 days; "month" → 30; "N days"): per-day averages over medium/high-confidence notes (low-only days
+    flagged), the newest 40 notes with rationale, the unrated count; Codex answers with dates, trend and
+    honest uncertainty, no diagnosis.
+  * Not on the watch, not on the diary page. Web UI → **Mood** (loopback only, `GET /ui/api/mood?days=30`
+    → `{from, days: [{date, mood, energy, notes, used, low_only}], notes: [...], unrated}`): two small
+    charts (mood, energy — separate scales) and a per-note table.
+
+Measured (live check 2026-11-15 ~03:00, second instance on :8797, real whisper + Codex + Piper, host load
+average ~20): briefing 61 s upload → reply (Codex 11.0 s, one call, TTS 23.5 s, rest whisper); reflection
+start 63 s (Codex 9.1 s); reflection save proposal 122 s (Codex 13.6 s; whisper slow under load); confirm
+79 s (Codex 8.8 s); "how's my mood been this week?" 71 s (Codex 9.8 s). Diary build with mood piggyback
+14.6 s for one note. No detail round was needed in any of them (the trigger regex caught each request).
+
 ### Measured (live check 2026-11-14, second instance on :8799, host under heavy load)
 
 Upload → reply done: progress question with a detail round 40 s (whisper 13.6 s, index prefetched, Codex

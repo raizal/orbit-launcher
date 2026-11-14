@@ -12,14 +12,14 @@ import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import actions, diary
+from . import actions, diary, insights
 from .config import Config
 from .store import Note, Store
 from .talk import PERSONA, reply_paths
@@ -208,6 +208,18 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
                 raise HTTPException(502, f"could not synthesize the preview: {e}") from e
             data = out.read_bytes()
         return Response(data, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+    @api.get("/mood")
+    def mood(days: int = 30):
+        """Private mood/energy estimates (docs/talk.md -> Briefing, reflection, mood). Loopback only, like all of
+        /ui/api; never sent to the watch."""
+        days = max(1, min(365, days))
+        first = date.today() - timedelta(days=days - 1)
+        log = insights.MoodLog(cfg.data_dir)
+        rows = log.since(first)
+        return {"from": first.isoformat(), "days": insights.daily_averages(rows), "unrated": log.unrated(first),
+                "notes": [{k: r[k] for k in ("note_id", "local_date", "started_at", "mode", "mood", "energy",
+                                             "confidence", "rationale", "source")} for r in reversed(rows)]}
 
     @api.get("/pairing.png")
     def pairing_png():

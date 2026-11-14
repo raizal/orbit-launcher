@@ -62,6 +62,12 @@ notes: 3
 
 Rules: never invent events not in the transcripts; keep the raw transcripts available (collapsed section or linked file); re-running for a date overwrites the generated part only. Language from config (open decision).
 
+Also on the page (docs/talk.md -> "Briefing, reflection, mood"): a `## Reflection` section saved from Talk
+after a spoken yes, between `<!-- orbit:reflection:begin/end -->` markers **after** the orbit block, so a
+rebuild keeps it (and puts it back from `data_dir/reflections/<date>.md` if the page was deleted). The same
+diary LLM call also returns a private mood/energy estimate per note (`summaries[].mood`), stored in the
+`note_mood` table of `index.sqlite` — never written to the page.
+
 ## Tests
 
 pytest for: idempotent PUT, 409 on sha mismatch, auth, storage path from `started_at` across midnight and time zones, diary grouping by local date.

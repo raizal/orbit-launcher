@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from . import insights
 from .config import Config
 from .store import Note, Store, write_atomic
 
@@ -32,6 +33,7 @@ class Generated:
     diary: str
     summaries: list[str]  # one per entry, same order
     todos: list[str] = field(default_factory=list)  # things the owner said they need to do
+    moods: list[dict | None] = field(default_factory=list)  # private per-note estimates (never on the page)
 
 
 def collect(store: Store, day: date) -> list[Entry]:
@@ -71,7 +73,9 @@ Rules:
 - Transcripts come from speech recognition and may contain errors; do not guess wildly at garbled words.
 - {language}
 Also give a one-line summary (max ~12 words) for each note, in the same language as the diary,
-and list the concrete to-dos the owner says they need or plan to do (empty list if none; never invent any)."""
+and list the concrete to-dos the owner says they need or plan to do (empty list if none; never invent any).
+Finally, for each note, privately estimate the speaker's mood and energy from that note alone ({mood_rule}).
+These estimates are stored separately: never mention mood or energy scores in the diary text."""
 
 SCHEMA = {
     "type": "object",
@@ -81,8 +85,9 @@ SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"note": {"type": "integer"}, "summary": {"type": "string"}},
-                "required": ["note", "summary"],
+                "properties": {"note": {"type": "integer"}, "summary": {"type": "string"},
+                               "mood": insights.MOOD_SCHEMA},
+                "required": ["note", "summary", "mood"],
                 "additionalProperties": False,
             },
         },
@@ -103,15 +108,17 @@ def prompt_parts(cfg: Config, day: date, entries: list[Entry]) -> tuple[str, str
     notes = "\n\n".join(
         f"[note {i}] {e.note.started:%H:%M}\n{e.transcript or transcript_label(e.transcript)}" for i, e in enumerate(entries)
     )
-    return SYSTEM_PROMPT.format(language=language), f"Voice notes from {day:%A, %d %B %Y}, in time order:\n\n{notes}"
+    return SYSTEM_PROMPT.format(language=language, mood_rule=insights.MOOD_RULE), f"Voice notes from {day:%A, %d %B %Y}, in time order:\n\n{notes}"
 
 
 def from_json(data: dict, entries: list[Entry]) -> Generated:
     by_note = {s["note"]: s["summary"].strip() for s in data.get("summaries", [])}
+    moods = {s["note"]: s.get("mood") for s in data.get("summaries", [])}
     return Generated(
         data["diary"].strip(),
         [by_note.get(i) or first_words(e.transcript) for i, e in enumerate(entries)],
         [t.strip() for t in data.get("todos", []) if t.strip()],
+        [moods.get(i) if e.transcript else None for i, e in enumerate(entries)],
     )
 
 
@@ -260,6 +267,21 @@ def build(cfg: Config, store: Store, day: date) -> Path:
     gen = PROVIDERS[cfg.llm_provider](cfg, day, entries) if entries else Generated("_No notes recorded this day._", [])
     block = render_block(day, entries, gen, cfg)
     existing = page.read_text() if page.exists() else ""
-    write_atomic(page, merge(existing, day, len(entries), block).encode())
+    write_atomic(page, insights.restore_reflection(cfg, day, merge(existing, day, len(entries), block)).encode())
+    record_moods(cfg, entries, gen)
     return page
+
+
+def record_moods(cfg: Config, entries: list[Entry], gen: Generated) -> None:
+    """Quiet mood/energy bookkeeping piggybacked on the diary call (no extra LLM call). Talk-turn estimates
+    for the same note are kept (insights.MoodLog.record)."""
+    if not gen.moods:
+        return
+    try:
+        log = insights.MoodLog(cfg.data_dir)
+        for e, m in zip(entries, gen.moods):
+            if m is not None:
+                log.record(e.note, m, "diary")
+    except Exception as e:  # noqa: BLE001 - the page is written; bookkeeping must not fail the build
+        print(f"diary: mood estimates not stored: {e}")
 

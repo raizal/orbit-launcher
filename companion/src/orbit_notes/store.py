@@ -134,6 +134,14 @@ class Store:
         where = "" if include_done else "WHERE transcript_status != 'done'"
         return self._query(f"SELECT * FROM notes {where} ORDER BY started_utc")
 
+    def days(self) -> list[dict]:
+        """Local dates that have notes, newest first, with counts."""
+        with closing(self._db()) as db:
+            rows = db.execute(
+                "SELECT local_date, COUNT(*) AS n FROM notes GROUP BY local_date ORDER BY local_date DESC"
+            ).fetchall()
+        return [{"date": r["local_date"], "count": r["n"]} for r in rows]
+
     def notes_on(self, day: date) -> list[Note]:
         return self._query("SELECT * FROM notes WHERE local_date = ? ORDER BY started_utc", day.isoformat())
 

@@ -295,3 +295,51 @@ def test_anthropic_provider_parses_structured_output(client, store, cfg, monkeyp
     assert seen["model"] == "claude-sonnet-5-5"
     assert "went to the market" in seen["messages"][0]["content"]
     assert "I went to the market." in text and "— Market trip" in text
+
+
+# --- local web UI ---------------------------------------------------------------------------------
+
+
+def ui_client(cfg, store, host="testclient"):
+    from orbit_notes.ui import mount_ui
+
+    app = create_app(cfg, store)
+    queued = []
+    mount_ui(app, cfg, store, queued.append)
+    c = TestClient(app, client=(host, 50000))
+    c.queued = queued
+    return c
+
+
+def test_ui_lists_days_notes_and_transcripts(client, store, cfg):
+    add_note(client, store, "2026-11-13T07:02:10+07:00", "hello there")
+    add_note(client, store, "2026-11-14T08:00:00+07:00", "")
+    ui = ui_client(cfg, store)
+    assert ui.get("/ui/api/days").json() == [{"date": "2026-11-14", "count": 1}, {"date": "2026-11-13", "count": 1}]
+    notes = ui.get("/ui/api/notes", params={"day": "2026-11-13"}).json()
+    assert [(n["time"], n["transcript"]) for n in notes] == [("07:02", "hello there")]
+    assert ui.get("/ui/api/notes", params={"day": "2026-11-14"}).json()[0]["transcript"] == ""
+    assert ui.get(f"/ui/api/notes/{notes[0]['id']}/audio").content == b"2026-11-13T07:02:10+07:00"
+    assert ui.get("/ui/api/status").json()["notes"] == 2
+
+
+def test_ui_retranscribe_and_diary(client, store, cfg):
+    add_note(client, store, "2026-11-13T07:02:10+07:00", "hello")
+    ui = ui_client(cfg, store)
+    note_id = ui.get("/ui/api/notes", params={"day": "2026-11-13"}).json()[0]["id"]
+    assert ui.post(f"/ui/api/notes/{note_id}/transcribe").status_code == 200
+    assert ui.queued == [note_id] and store.get(note_id).transcript_status == "pending"
+    assert ui.get("/ui/api/diary/2026-11-13").json()["markdown"] is None
+    built = ui.post("/ui/api/diary/2026-11-13").json()
+    assert "# Friday, 13 November 2026" in built["markdown"]
+    assert ui.get("/ui/api/diary/2026-11-13").json()["markdown"] == built["markdown"]
+    assert ui.get("/ui/api/diary/13-11-2026").status_code == 422
+
+
+def test_ui_is_local_only(client, store, cfg):
+    lan = ui_client(cfg, store, host="192.168.1.24")
+    for path in ("/ui/api/status", "/ui/api/days", "/ui/api/pairing.png", "/ui/", "/"):
+        assert lan.get(path).status_code == 403, path
+    # The watch API stays reachable from the LAN.
+    assert lan.get("/v1/health", params={"nonce": "n"}).status_code == 200
+    assert ui_client(cfg, store).get("/ui/api/pairing.png").headers["content-type"] == "image/png"

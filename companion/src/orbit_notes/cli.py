@@ -34,12 +34,15 @@ def serve(config: ConfigOpt = None, mdns: bool = typer.Option(True, help="Advert
 
     from .api import create_app, serve_lifespan
     from .transcribe import Transcriber, Worker
+    from .ui import mount_ui
 
     cfg, store = _load(config)
     w = Worker(store, Transcriber(cfg)) if worker else None
     app_ = create_app(cfg, store, on_stored=w.enqueue if w else (lambda _id: None),
                       lifespan=serve_lifespan(cfg, w, advertise=mdns))
+    mount_ui(app_, cfg, store, w.enqueue if w else None)
     typer.echo(f"Orbit Notes '{cfg.name}' on {cfg.host}:{cfg.port}  config={cfg.path}  data={cfg.data_dir}")
+    typer.echo(f"UI (this computer only): http://localhost:{cfg.port}/ui/")
     uvicorn.run(app_, host=cfg.host, port=cfg.port)
 
 

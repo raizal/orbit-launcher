@@ -59,3 +59,13 @@ which Obsidian opens in the system player. Audio is not copied.
 ```cron
 30 4 * * * cd /path/to/orbit-launcher/companion && $HOME/.local/bin/uv run orbit-notes diary --yesterday >> /tmp/orbit-diary.log 2>&1
 ```
+
+## Web UI (this computer only)
+
+`orbit-notes serve` also serves a small page at **http://localhost:8765/ui/**: notes per day with audio
+player and transcript, re-transcribe, build/view the diary page, and the pairing QR. It only answers
+requests from this computer (the LAN gets 403), because it exposes transcripts and the token.
+
+The page is a Svelte app in `web/`, built into `src/orbit_notes/web/` (committed, so serving needs no Node).
+After changing it: `cd web && npm install && npm run build`. For live editing: `npm run dev` (proxies the API
+to a running server on 8765).

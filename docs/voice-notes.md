@@ -51,14 +51,15 @@ Rule: one press from the face must start recording within 1 second, with a short
 }
 ```
 
-`location` is optional and coarse (last known location only; never wait for a GPS fix).
+`location` is optional and coarse (last known location only; never wait for a GPS fix). **Not written yet** (the watch has no last-known location without a fix). A sidecar may also carry `"recovered": true` (finalized after a crash).
 
 ## Queue & states
 
 `recorded → waiting → sending (progress) → sent → (deleted after 7 days)`. Also `failed` with last error, which keeps retrying.
 
 - **The server is local only.** Uploads happen only when the watch is on the paired home Wi-Fi — never on LTE, never on other Wi-Fi networks. Notes recorded outside just wait in the queue.
-- One WorkManager unique work per note (`upload-<id>`), constraint `UNMETERED`, exponential backoff 30 s → 1 h. Also trigger the queue when the home Wi-Fi connects (`ConnectivityManager.NetworkCallback`).
+- **As built:** one WorkManager unique work `upload-queue` that sends every unsent note oldest-first (no parallel uploads on the slow watch), constraint `UNMETERED`, exponential backoff from 30 s. It is triggered by: a saved note (explicit broadcast from the `:voice` process), the Wi-Fi connecting (`NetworkCallback`, replaces a backed-off run), and a 15-min periodic sweep. Not on home Wi-Fi → it ends quietly and waits for the next trigger. Measured: offline note uploads ~35 s after Wi-Fi returns.
+- Upload state lives in `files/queue/<stem>.json` (main process only); the notes folder is the source of truth (no entry = waiting).
 - Mark `sent` only when the server returns the same sha256.
 - **Never delete an unsent note.** Sent notes are kept 7 days, then deleted by a daily cleanup job.
 

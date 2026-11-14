@@ -2,7 +2,7 @@
 
 Each phase ends with a checkpoint Raiz can test by hand. Do not start the next phase until the checkpoint passes.
 
-## Phase 0 — Device probe (≈1 hour)
+## Phase 0 — Device probe (≈1 hour) — ✅ done (`docs/device-facts.md`)
 
 Goal: confirm the facts the later phases depend on.
 
@@ -16,7 +16,7 @@ Goal: confirm the facts the later phases depend on.
 
 **Checkpoint:** a short `docs/device-facts.md` written from the results.
 
-## Phase 1 — Orbit audio diary (watch, inside the Orbit app)
+## Phase 1 — Orbit audio diary (watch, inside the Orbit app) — ✅ built; open: 10-min unplugged screen-off test, tests 4–5 by hand
 
 Spec: `docs/voice-notes.md`. In this phase Orbit is installed as a normal app (not yet HOME). Entry: the Orbit app icon opens the recorder; a static app shortcut "New voice note" (long-press icon) starts recording.
 
@@ -25,7 +25,7 @@ Spec: `docs/voice-notes.md`. In this phase Orbit is installed as a normal app (n
 - 1c. Upload with WorkManager to a **hard-coded** LAN IP:8765 + token. Retries, sha256 check. **Checkpoint:** turn Wi-Fi off, record, turn it on → note uploads once, no duplicates.
 - 1d. Server discovery (last IP → mDNS → /24 scan, with HMAC proof check) + QR pairing + server picker screen. **Checkpoint:** fresh install, scan QR, notes recorded away from home upload after joining home Wi-Fi; still works after the PC's IP changes.
 
-## Phase 2 — Orbit Notes companion
+## Phase 2 — Orbit Notes companion — ✅ built (`companion/`, 26 tests); 2c/2d defaults pending decisions 2–5 below
 
 Spec: `docs/companion.md`. Can be built in parallel with 1c (1c needs at least the `PUT` endpoint).
 

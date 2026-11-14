@@ -53,9 +53,10 @@ A face is a JSON file of layers drawn on one Compose `Canvas`. Coordinates are o
 }
 ```
 
-Layer → composable: `text`→`FaceText`, `curvedText`→`FaceCurvedText`, `arc`→`FaceArc`, `ticks`→`FaceTicks`, `hands`→`FaceHands`, `complication`→`ComplicationSlot`, `image`→`FaceImage`, `group`→`FaceGroup`.
-Bindings: `time.HH/mm/ss`, `date.EEE/d/MMM`, `battery.level`, `steps.count/progress` (only if `TYPE_STEP_COUNTER` exists — else hide), `weather.temp/icon`, `notif.unread`, `net.lte/wifi`.
-Faces live in `/sdcard/Android/data/<pkg>/files/faces/*.face.json`, hot-reloaded on change (push with adb). Invalid file → show error face, never crash.
+**As built** (`feature-launcher/.../face/`): one Canvas draws `ticks` (`count r len width color major majorLen majorWidth majorColor`), `arc` / `circle` (`r start sweep width color track fill value`), `text` (`text x y size weight font spacing upper`; (x, y) = center of the text), `hands` (`hand=hour|minute|second len tail width color`), `dot` (`r color`), `group` (children offset by x−200, y−200). `complication` (`slot x y default style=bubble|bare`) are tappable composables. `curvedText` and `image` are not implemented yet. Unknown fields/types are ignored.
+Bindings: `time.HH/hh/mm/ss`, `date.EEE/EEEE/d/MMM`, `battery.level/progress`, `day.progress` (0–1 through the day), `weather.temp`, `notif.unread`, `net.lte/wifi`. **No `steps.*`** — the H10 has no step counter; a layer whose binding is unavailable is hidden. The Orbit face's arc shows `day.progress` instead of steps.
+Complication types: `weather`, `voice_note` (one press → recording), `battery`, `date`, `notif`, `none`; per-slot choice and accent tweak are stored per face.
+Faces: bundled `orbit`, `analog` (assets) + `/sdcard/Android/data/com.orbit/files/faces/<name>.face.json` (same id overrides). Hot reload polls the folder every 3 s (FileObserver misses adb pushes on 8.1). Invalid file → error face with the time and the parse error, never a crash.
 
 ## Quick settings toggles (what is possible on 8.1)
 

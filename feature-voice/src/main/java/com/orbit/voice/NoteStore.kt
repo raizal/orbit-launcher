@@ -25,6 +25,8 @@ data class NoteMeta(
     val recovered: Boolean = false,
     /** `"talk"` for a Talk turn (the companion answers it); absent for a normal note. */
     val mode: String? = null,
+    /** `"new"` on the first Talk turn after the user tapped New (docs/talk.md); absent = continue. */
+    val conversation: String? = null,
 )
 
 /**
@@ -44,7 +46,7 @@ class NoteStore(private val context: Context) {
     fun tempFile(stamp: String) = File(dir, "$stamp$AUDIO_EXT$TEMP_SUFFIX")
 
     /** Renames the temp file and writes the sidecar. Returns the final audio file. */
-    fun finalize(temp: File, startedAtMs: Long, durationMs: Long, recovered: Boolean = false, mode: String? = null): File {
+    fun finalize(temp: File, startedAtMs: Long, durationMs: Long, recovered: Boolean = false, mode: String? = null, conversation: String? = null): File {
         val audio = File(dir, temp.name.removeSuffix(TEMP_SUFFIX))
         if (!temp.renameTo(audio)) error("rename failed: ${temp.name}")
         val meta = NoteMeta(
@@ -56,6 +58,7 @@ class NoteStore(private val context: Context) {
             app_version = appVersion(),
             recovered = recovered,
             mode = mode,
+            conversation = conversation,
         )
         // Write via a temp file so a crash never leaves half a sidecar.
         val json = File(dir, audio.nameWithoutExtension + ".json")

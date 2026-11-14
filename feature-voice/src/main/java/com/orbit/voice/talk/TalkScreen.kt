@@ -8,12 +8,12 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,15 +46,14 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -60,7 +62,6 @@ import com.orbit.core.OrbitColors
 import com.orbit.core.OrbitFonts
 import com.orbit.core.RotaryEffect
 import com.orbit.core.SvgIcon
-import com.orbit.voice.R
 import com.orbit.voice.TICKS
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -77,29 +78,188 @@ fun TalkScreen(
     state: TalkUi,
     levels: FloatArray,
     serverName: String?,
+    history: List<TalkTurn>,
+    fresh: Boolean,
+    playingStem: String?,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onSkip: () -> Unit,
-    onAgain: () -> Unit,
+    onReplay: (TalkTurn) -> Unit,
+    onNew: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         Rim(state, levels)
         when (state) {
-            is TalkUi.Idle -> Idle(state, serverName, onStart)
             is TalkUi.Listening -> Listening(state, onStop)
             is TalkUi.Waiting -> Waiting(state)
-            is TalkUi.Speaking -> Reply(state.text, speaking = true, onSkip)
-            is TalkUi.Done -> Reply(state.text, speaking = false, onAgain)
-            is TalkUi.Later -> Ended(
-                title = "Saved", line = "Feedback when you're home", lineColor = OrbitColors.Accent,
-                detail = state.reason, onAgain = onAgain,
-            )
-            is TalkUi.Failed -> Ended(
-                title = "No feedback", line = "Your note is saved", lineColor = OrbitColors.Muted,
-                detail = state.message, onAgain = onAgain,
-            )
+            is TalkUi.Speaking -> Reply(state.text, onSkip)
+            // Resting states: the conversation, with the new turn in it.
+            is TalkUi.Idle -> HistoryView(history, fresh, playingStem, state.note, serverName, onStart, onReplay, onNew)
+            is TalkUi.Done -> HistoryView(history, fresh, playingStem, null, serverName, onStart, onReplay, onNew)
+            is TalkUi.Later -> HistoryView(history, fresh, playingStem, null, serverName, onStart, onReplay, onNew)
+            is TalkUi.Failed -> HistoryView(history, fresh, playingStem, state.message, serverName, onStart, onReplay, onNew)
         }
     }
+}
+
+/**
+ * The conversation, newest at the bottom (reverse layout keeps it anchored there),
+ * crown + drag scroll. "New" on top, the big talk button below.
+ */
+@Composable
+private fun HistoryView(
+    turns: List<TalkTurn>,
+    fresh: Boolean,
+    playingStem: String?,
+    note: String?,
+    serverName: String?,
+    onStart: () -> Unit,
+    onReplay: (TalkTurn) -> Unit,
+    onNew: () -> Unit,
+) {
+    val list = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // Clockwise = later (down). In a reversed list, later is toward index 0.
+    RotaryEffect { step -> scope.launch { list.animateScrollBy(-step * 48f) } }
+    val newest = turns.lastOrNull()?.stem
+    LaunchedEffect(newest, note) { list.scrollToItem(0) }
+
+    if (turns.isNotEmpty() || !fresh) {
+        // Visible 96 × 36; the touch target is 120 × 72.
+        Box(
+            Modifier
+                .offset(140.dp, 22.dp)
+                .size(120.dp, 72.dp)
+                .clickable(onClick = onNew)
+                .semantics { contentDescription = "New conversation" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(
+                Modifier.size(96.dp, 36.dp).clip(RoundedCornerShape(50)).background(OrbitColors.Surface),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SvgIcon(PLUS_ICON, 14.dp, OrbitColors.Ink)
+                Spacer(Modifier.width(6.dp))
+                BasicText("New", style = style(13, FontWeight.SemiBold))
+            }
+        }
+    } else {
+        Label("NEW CONVERSATION", top = 50.dp, color = OrbitColors.Muted)
+    }
+
+    if (turns.isEmpty()) {
+        Box(
+            Modifier.offset(168.dp, 116.dp).size(64.dp).clip(CircleShape).background(OrbitColors.Surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            SvgIcon(BUBBLE_ICON, 30.dp, OrbitColors.Accent)
+        }
+        val line = when {
+            note != null -> note
+            serverName != null -> "Feedback from $serverName"
+            else -> "Not paired — saved as notes"
+        }
+        CenterText(line, top = 198.dp, size = 13, color = if (note != null) OrbitColors.Rec else OrbitColors.Muted)
+    } else {
+        LazyColumn(
+            Modifier
+                .offset(60.dp, 94.dp)
+                .size(280.dp, 168.dp)
+                .fadeEdges(),
+            state = list,
+            reverseLayout = true,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (note != null) item(key = "note") {
+                BasicText(
+                    note,
+                    Modifier.padding(vertical = 8.dp).width(240.dp),
+                    style = style(12, FontWeight.Normal, color = OrbitColors.Muted).copy(textAlign = TextAlign.Center),
+                )
+            }
+            items(turns.asReversed(), key = { it.stem }) { t ->
+                TurnItem(t, playing = t.stem == playingStem, onReplay = { onReplay(t) })
+            }
+        }
+    }
+
+    // The big talk button: 176 × 64 visible, 72 tall to touch.
+    Box(
+        Modifier
+            .offset(112.dp, 266.dp)
+            .size(176.dp, 72.dp)
+            .clickable(onClick = onStart)
+            .semantics { contentDescription = "Start talking" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.size(176.dp, 64.dp).clip(RoundedCornerShape(50)).background(OrbitColors.Accent),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SvgIcon(BUBBLE_ICON, 22.dp, OrbitColors.OnAccent)
+            Spacer(Modifier.width(8.dp))
+            BasicText("Tap to talk", style = style(15, FontWeight.SemiBold, color = OrbitColors.OnAccent))
+        }
+    }
+}
+
+/** Your words (2 lines, muted), then the reply with ▶ — or where the reply stands. */
+@Composable
+private fun TurnItem(t: TalkTurn, playing: Boolean, onReplay: () -> Unit) {
+    Column(
+        Modifier.width(264.dp).padding(top = 12.dp, bottom = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        BasicText(
+            t.transcript ?: "Voice note · ${TalkHistory.clock(t.started_at)}",
+            style = style(13, FontWeight.Normal, color = OrbitColors.Muted).copy(textAlign = TextAlign.Center, lineHeight = 18.sp),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.size(6.dp))
+        when {
+            t.hasReply -> {
+                BasicText(
+                    t.reply!!,
+                    style = style(16, FontWeight.Medium).copy(textAlign = TextAlign.Center, lineHeight = 22.sp),
+                )
+                Box(
+                    Modifier
+                        .size(72.dp, 56.dp)
+                        .clickable(onClick = onReplay)
+                        .semantics { contentDescription = if (playing) "Stop reply" else "Play reply" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape).background(if (playing) OrbitColors.Accent else OrbitColors.Surface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        SvgIcon(
+                            if (playing) STOP_ICON else PLAY_ICON, 18.dp,
+                            if (playing) OrbitColors.OnAccent else OrbitColors.Accent,
+                        )
+                    }
+                }
+            }
+            t.status == STATUS_SAVED -> TurnLine("Saved — feedback when you're home", OrbitColors.Accent)
+            t.working -> TurnLine(TalkMachine.statusLabel(TalkUi.Waiting(TalkUi.Phase.THINKING, t.status)), OrbitColors.Info)
+            else -> TurnLine("No feedback" + (t.error?.let { " · $it" } ?: ""), OrbitColors.Muted)
+        }
+        Box(Modifier.padding(top = 6.dp).size(32.dp, 2.dp).clip(RoundedCornerShape(1.dp)).background(OrbitColors.Track))
+    }
+}
+
+@Composable
+private fun TurnLine(text: String, color: Color) {
+    BasicText(
+        text,
+        Modifier.padding(vertical = 4.dp),
+        style = style(13, FontWeight.Medium, color = color).copy(textAlign = TextAlign.Center),
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -142,29 +302,6 @@ private fun Rim(state: TalkUi, levels: FloatArray) {
                 cap = StrokeCap.Round,
             )
         }
-    }
-}
-
-@Composable
-private fun Idle(state: TalkUi.Idle, serverName: String?, onStart: () -> Unit) {
-    Label("TALK", top = 84.dp, color = OrbitColors.Muted)
-    Box(
-        Modifier
-            .offset(140.dp, 128.dp)
-            .size(120.dp)
-            .clip(CircleShape)
-            .background(OrbitColors.Accent)
-            .clickable(onClick = onStart)
-            .semantics { contentDescription = "Start talking" },
-        contentAlignment = Alignment.Center,
-    ) {
-        SvgIcon(BUBBLE_ICON, 48.dp, OrbitColors.OnAccent)
-    }
-    CenterText("Tap to talk", top = 270.dp, size = 15, weight = FontWeight.SemiBold)
-    when {
-        state.note != null -> CenterText(state.note, top = 296.dp, size = 13, color = OrbitColors.Rec)
-        serverName != null -> CenterText("Feedback from $serverName", top = 296.dp, size = 13, color = OrbitColors.Muted)
-        else -> CenterText("Not paired — saved as notes", top = 296.dp, size = 13, color = OrbitColors.Muted)
     }
 }
 
@@ -220,9 +357,9 @@ private fun Waiting(state: TalkUi.Waiting) {
     )
 }
 
-/** Reply text inside the inscribed square; rotary scrolls it. */
+/** The reply being spoken, inside the inscribed square; rotary scrolls it. */
 @Composable
-private fun Reply(text: String, speaking: Boolean, onButton: () -> Unit) {
+private fun Reply(text: String, onSkip: () -> Unit) {
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     RotaryEffect { step -> scope.launch { scroll.animateScrollBy(step * 48f) } }
@@ -231,14 +368,11 @@ private fun Reply(text: String, speaking: Boolean, onButton: () -> Unit) {
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (speaking) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(OrbitColors.Accent))
-            Spacer(Modifier.width(7.dp))
-        }
+        Box(Modifier.size(8.dp).clip(CircleShape).background(OrbitColors.Accent))
+        Spacer(Modifier.width(7.dp))
         BasicText(
-            if (speaking) "SPEAKING" else "REPLY",
-            style = style(12, FontWeight.SemiBold, OrbitFonts.Inter, if (speaking) OrbitColors.Accent else OrbitColors.Muted)
-                .copy(letterSpacing = 0.14.em),
+            "SPEAKING",
+            style = style(12, FontWeight.SemiBold, OrbitFonts.Inter, OrbitColors.Accent).copy(letterSpacing = 0.14.em),
         )
     }
     Box(
@@ -254,25 +388,7 @@ private fun Reply(text: String, speaking: Boolean, onButton: () -> Unit) {
             style = style(18, FontWeight.Medium).copy(textAlign = TextAlign.Center, lineHeight = 25.sp),
         )
     }
-    Pill(if (speaking) "Skip" else "Talk again", top = 308.dp, primary = !speaking, onClick = onButton)
-}
-
-@Composable
-private fun Ended(title: String, line: String, lineColor: Color, detail: String, onAgain: () -> Unit) {
-    Box(
-        Modifier.offset(168.dp, 84.dp).size(64.dp).clip(CircleShape).background(OrbitColors.Surface),
-        contentAlignment = Alignment.Center,
-    ) {
-        Image(
-            painterResource(R.drawable.ic_check), null,
-            Modifier.size(30.dp),
-            colorFilter = ColorFilter.tint(OrbitColors.Accent),
-        )
-    }
-    CenterText(title, top = 160.dp, size = 26, weight = FontWeight.SemiBold, font = OrbitFonts.Grotesk)
-    CenterText(line, top = 198.dp, size = 13, color = lineColor)
-    CenterText(detail, top = 220.dp, size = 12, color = OrbitColors.Muted)
-    Pill("Talk again", top = 260.dp, primary = false, onClick = onAgain)
+    Pill("Skip", top = 308.dp, primary = false, onClick = onSkip)
 }
 
 @Composable
@@ -341,6 +457,11 @@ private fun mmss(ms: Long): String {
     val t = (ms / 1000).coerceAtLeast(0)
     return "%02d:%02d".format(t / 60, t % 60)
 }
+
+/** lucide `plus`, `play`, `square`. */
+private const val PLUS_ICON = "M5 12h14M12 5v14"
+private const val PLAY_ICON = "M7 4l13 8-13 8Z"
+private const val STOP_ICON = "M6 6h12v12H6Z"
 
 /** lucide `message-circle`. */
 const val BUBBLE_ICON = "M7.9 20A9 9 0 1 0 4 16.1L2 22Z"

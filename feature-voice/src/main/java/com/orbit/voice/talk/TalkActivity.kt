@@ -27,6 +27,7 @@ import com.orbit.voice.RecorderState
 import com.orbit.voice.RecorderUi
 import com.orbit.voice.TICKS
 import com.orbit.voice.VoiceEntry
+import com.orbit.voice.upload.Discovery
 import com.orbit.voice.upload.NoteState
 import com.orbit.voice.upload.OrbitClient
 import com.orbit.voice.upload.Progress
@@ -34,11 +35,16 @@ import com.orbit.voice.upload.Queue
 import com.orbit.voice.upload.ServerPrefs
 import com.orbit.voice.upload.Uploads
 import com.orbit.voice.upload.WifiNow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.coroutines.resume
@@ -51,6 +57,10 @@ import kotlin.coroutines.resume
  *
  * The note is safe the moment the service saves it; everything after that is
  * best effort and can be abandoned (back, timeout) without losing anything.
+ *
+ * Talk opens on the conversation history (docs/talk.md → Conversations & history):
+ * the cached conversation from `files/talk/` right away, refreshed from
+ * `GET /v1/talk/history` when the companion is reachable.
  */
 class TalkActivity : ComponentActivity() {
 
@@ -58,6 +68,13 @@ class TalkActivity : ComponentActivity() {
     private var ui by mutableStateOf<TalkUi>(TalkUi.Idle())
     private var levels by mutableStateOf(FloatArray(TICKS))
     private var serverName by mutableStateOf<String?>(null)
+    private lateinit var cache: TalkCache
+    private var history by mutableStateOf(TalkHistory.State())
+    /** Stem whose reply is playing from the history (▶ → ■). */
+    private var playingStem by mutableStateOf<String?>(null)
+    private var refreshJob: Job? = null
+    private var replayJob: Job? = null
+    private val audioLock = Mutex()
     private var startWhenPermitted = false
     private var lastTick = 0L
     private var turn: Job? = null
@@ -101,6 +118,9 @@ class TalkActivity : ComponentActivity() {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         store = NoteStore(this)
+        cache = TalkCache(File(filesDir, "talk"))
+        // ≤ 50 small JSON files: read them now so the conversation is there on the first frame.
+        history = cache.load()
         ContextCompat.registerReceiver(this, receiver, IntentFilter(RecorderState.ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent {
             RoundScreen {
@@ -108,16 +128,24 @@ class TalkActivity : ComponentActivity() {
                     state = ui,
                     levels = levels,
                     serverName = serverName,
-                    onStart = ::record,
+                    history = history.turns,
+                    fresh = history.file.fresh,
+                    playingStem = playingStem,
+                    onStart = {
+                        stopPlayback()
+                        dispatch(TalkEvent.Reset)
+                        record()
+                    },
                     onStop = { VoiceEntry.stopRecording(this) },
                     onSkip = {
                         stopPlayback()
                         dispatch(TalkEvent.PlaybackEnded) // also if the audio is still downloading
                     },
-                    onAgain = {
+                    onReplay = ::replay,
+                    onNew = {
                         stopPlayback()
                         dispatch(TalkEvent.Reset)
-                        record()
+                        mutate { TalkHistory.startNew() }
                     },
                 )
             }
@@ -133,10 +161,12 @@ class TalkActivity : ComponentActivity() {
             dispatch(TalkEvent.RecStarted(it.startElapsed))
         }
         handler.post(watchdog)
+        refresh()
     }
 
     override fun onStop() {
         handler.removeCallbacks(watchdog)
+        refreshJob?.cancel()
         super.onStop()
     }
 
@@ -169,7 +199,8 @@ class TalkActivity : ComponentActivity() {
         }
         if (ui is TalkUi.Listening || ui is TalkUi.Waiting) return
         turn?.cancel()
-        VoiceEntry.startRecording(this, MODE_TALK)
+        stopPlayback()
+        VoiceEntry.startRecording(this, MODE_TALK, if (history.file.nextIsNew) CONVERSATION_NEW else null)
         levels = FloatArray(TICKS)
         lastTick = SystemClock.elapsedRealtime()
         dispatch(TalkEvent.RecStarted(SystemClock.elapsedRealtime()))
@@ -198,6 +229,15 @@ class TalkActivity : ComponentActivity() {
             dispatch(TalkEvent.ReplyUpdate(Reply.Failed("Saved as a normal note")))
             return
         }
+        mutate { TalkHistory.add(it, TalkTurn(id = meta.id, stem = stem, started_at = meta.started_at)) }
+        try {
+            liveTurn(stem, meta.id)
+        } finally {
+            refresh() // fills in whatever the live turn did not see
+        }
+    }
+
+    private suspend fun liveTurn(stem: String, id: String) {
         Uploads.kick(this, fresh = true)
         val prefs = ServerPrefs(this)
         val pairing = prefs.pairing ?: return dispatch(TalkEvent.Offline("Not paired"))
@@ -207,6 +247,7 @@ class TalkActivity : ComponentActivity() {
 
         awaitSent(stem)?.let { return dispatch(TalkEvent.Offline(it)) }
         dispatch(TalkEvent.Uploaded)
+        mutate { h -> TalkHistory.update(h, id) { if (it.status == STATUS_SAVED) it.copy(status = "queued") else it } }
 
         val ip = prefs.lastIp ?: return dispatch(TalkEvent.Offline("Companion not found"))
         val client = OrbitClient(wifi.network.socketFactory)
@@ -214,12 +255,13 @@ class TalkActivity : ComponentActivity() {
         var done: Reply.Done? = null
         while (done == null) {
             val r = withContext(Dispatchers.IO) {
-                runCatching { client.reply(ip, pairing.port, pairing.token, meta.id) }
+                runCatching { client.reply(ip, pairing.port, pairing.token, id) }
                     .onFailure { Log.w(TAG, "reply poll failed", it) }
                     .getOrNull()
             }
             if (r != null) {
                 dispatch(TalkEvent.ReplyUpdate(r))
+                mutate { h -> TalkHistory.update(h, id) { it.withReply(r) } }
                 when (r) {
                     is Reply.Done -> done = r
                     is Reply.Failed, Reply.NotFound -> return
@@ -231,8 +273,112 @@ class TalkActivity : ComponentActivity() {
                 delay(REPLY_POLL_MS)
             }
         }
-        play(client, ip, pairing.port, pairing.token, done)
+        play(client, ip, pairing.port, pairing.token, stem, done)
         dispatch(TalkEvent.PlaybackEnded)
+    }
+
+    /** Mirrors a reply poll into the history turn. */
+    private fun TalkTurn.withReply(r: Reply): TalkTurn = when (r) {
+        is Reply.Pending -> copy(status = r.status)
+        is Reply.Done -> copy(status = "done", reply = r.text, audio = r.audioPath, transcript = r.transcript ?: transcript, error = null)
+        is Reply.Failed -> copy(status = "error", error = r.error)
+        Reply.NotFound, is Reply.Transient -> this
+    }
+
+    /** Changes the history in view and persists it (cache files are written in order, off the main thread). */
+    private fun mutate(f: (TalkHistory.State) -> TalkHistory.State) {
+        val old = history
+        val next = f(old)
+        if (next == old) return
+        history = next
+        val before = old.turns.associateBy { it.stem }
+        val changed = next.turns.filter { before[it.stem] != it }
+        val c = cache
+        writer.launch {
+            runCatching {
+                changed.forEach(c::writeTurn)
+                c.writeConversation(next.file)
+                c.prune(next.file.stems)
+            }.onFailure { Log.w(TAG, "talk cache write failed", it) }
+        }
+    }
+
+    /** The companion if it is reachable now (paired, home Wi-Fi, found); else null. */
+    private suspend fun companion(): Link? {
+        val prefs = ServerPrefs(this)
+        val pairing = prefs.pairing ?: return null
+        val wifi = WifiNow.read(this) ?: return null
+        val home = prefs.home ?: return null
+        if (!wifi.matches(home)) return null
+        val client = OrbitClient(wifi.network.socketFactory)
+        val ip = prefs.lastIp ?: Discovery(this, client, prefs).find(wifi, pairing, allowScan = false) ?: return null
+        return Link(client, ip, pairing.port, pairing.token)
+    }
+
+    private class Link(val client: OrbitClient, val ip: String, val port: Int, val token: String)
+
+    /**
+     * Refreshes the history from the companion; while turns are still being worked
+     * on there, keeps refreshing every few seconds (up to [REPLY_GIVE_UP_MS]).
+     */
+    private fun refresh() {
+        refreshJob?.cancel()
+        refreshJob = lifecycleScope.launch {
+            val start = SystemClock.elapsedRealtime()
+            while (true) {
+                val c = companion() ?: return@launch
+                val h = withContext(Dispatchers.IO) {
+                    runCatching { c.client.history(c.ip, c.port, c.token, HISTORY_KEEP) }
+                        .onFailure { Log.w(TAG, "history refresh failed", it) }
+                        .getOrNull()
+                } ?: return@launch
+                mutate { TalkHistory.merge(it, h) }
+                fetchMissingAudio(c)
+                val waiting = history.turns.any { it.working || it.status == STATUS_SAVED }
+                if (!waiting || SystemClock.elapsedRealtime() - start > REPLY_GIVE_UP_MS) return@launch
+                delay(HISTORY_POLL_MS)
+            }
+        }
+    }
+
+    /** Caches the reply audio of finished turns so replays work away from home. */
+    private suspend fun fetchMissingAudio(c: Link) {
+        for (t in history.turns.filter { it.hasReply && it.audio != null }) {
+            cacheAudio(c.client, c.ip, c.port, c.token, t.stem, t.audio!!)
+        }
+    }
+
+    /** Downloads a reply WAV into `files/talk/` unless it is there already. True = cached. */
+    private suspend fun cacheAudio(client: OrbitClient, ip: String, port: Int, token: String, stem: String, path: String): Boolean =
+        audioLock.withLock {
+            val file = cache.audioFile(stem)
+            file.exists() || withContext(Dispatchers.IO) {
+                runCatching { file.parentFile?.mkdirs(); client.download(ip, port, token, path, file) }
+                    .onFailure { Log.w(TAG, "reply audio $stem download failed", it) }
+                    .isSuccess
+            }
+        }
+
+    /** ▶ in the history: plays the cached reply (downloads it first if it is not cached yet). ■ stops. */
+    private fun replay(t: TalkTurn) {
+        val wasPlaying = playingStem == t.stem
+        stopPlayback()
+        if (wasPlaying) return
+        playingStem = t.stem
+        replayJob = lifecycleScope.launch {
+            try {
+                val file = cache.audioFile(t.stem)
+                if (!file.exists()) {
+                    val c = companion()
+                    val path = t.audio
+                    if (c == null || path == null) return@launch
+                    if (!cacheAudio(c.client, c.ip, c.port, c.token, t.stem, path)) return@launch
+                }
+                playFile(file)
+            } finally {
+                if (playingStem == t.stem) playingStem = null
+            }
+        }
     }
 
     /**
@@ -260,14 +406,14 @@ class TalkActivity : ComponentActivity() {
      * file. (MediaPlayer streams from the system media server, which would not use
      * our Wi-Fi binding, so we fetch it ourselves.) Text stays on screen either way.
      */
-    private suspend fun play(client: OrbitClient, ip: String, port: Int, token: String, reply: Reply.Done) {
-        val file = File(cacheDir, "talk-reply.wav")
-        val ok = withContext(Dispatchers.IO) {
-            runCatching { client.download(ip, port, token, reply.audioPath, file) }
-                .onFailure { Log.w(TAG, "reply audio download failed", it) }
-                .isSuccess
-        }
+    private suspend fun play(client: OrbitClient, ip: String, port: Int, token: String, stem: String, reply: Reply.Done) {
+        val ok = cacheAudio(client, ip, port, token, stem, reply.audioPath)
         if (!ok || ui !is TalkUi.Speaking) return
+        playFile(cache.audioFile(stem))
+    }
+
+    /** Plays a local WAV to the end (or until [stopPlayback]). */
+    private suspend fun playFile(file: File) = try {
         suspendCancellableCoroutine { cont ->
             val mp = MediaPlayer()
             player = mp
@@ -294,6 +440,7 @@ class TalkActivity : ComponentActivity() {
             onStopped = finish
             cont.invokeOnCancellation { handler.post { if (player === mp) releasePlayer() } }
         }
+    } finally {
         onStopped = null
     }
 
@@ -301,7 +448,13 @@ class TalkActivity : ComponentActivity() {
 
     /** "Skip": stop the reply audio; the turn moves on to done. */
     private fun stopPlayback() {
-        onStopped?.invoke() ?: releasePlayer()
+        replayJob?.cancel()
+        replayJob = null
+        playingStem = null
+        val stopped = onStopped
+        onStopped = null
+        stopped?.invoke()
+        releasePlayer()
     }
 
     private fun releasePlayer() {
@@ -324,5 +477,10 @@ class TalkActivity : ComponentActivity() {
         private const val IDLE_GIVE_UP_MS = 30_000L
         private const val FAILED_GRACE_MS = 8_000L
         private const val READ_MS = 60_000L
+        private const val HISTORY_POLL_MS = 5_000L
+
+        /** Cache writes outlive the activity and run one at a time, in order. */
+        @OptIn(ExperimentalCoroutinesApi::class)
+        private val writer = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     }
 }

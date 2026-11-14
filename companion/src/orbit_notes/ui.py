@@ -8,21 +8,26 @@ from __future__ import annotations
 
 import io
 import json
+import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import actions, diary
 from .config import Config
 from .store import Note, Store
-from .talk import reply_paths
+from .talk import PERSONA, reply_paths
 
 WEB_DIR = Path(__file__).parent / "web"  # built by `npm run build` in companion/web
+PREVIEW_TEXT = "Hi, I'm Orbit. This is how I'll sound when I answer your voice notes."
+PREVIEW_MAX = 300
+SETTINGS_KEYS = {"voice", "length_scale", "personality", "reply_length"}
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav"}
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
 
@@ -56,8 +61,22 @@ def note_json(store: Store, n: Note) -> dict:
     }
 
 
-def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], None] | None) -> None:
+def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], None] | None,
+             tts: Callable[..., None] | None = None) -> None:
+    """`tts` is the Talker's synthesizer (shares loaded voices); without one, a PiperTTS is made on first preview."""
     api = APIRouter(prefix="/ui/api", dependencies=[Depends(require_local)])
+    settings_store = actions.SettingsStore(cfg.data_dir, cfg.tts_voice)
+    synth: list[Callable[..., None]] = [tts] if tts else []
+
+    def get_tts() -> Callable[..., None]:
+        if not synth:
+            from .tts import PiperTTS
+
+            synth.append(PiperTTS(cfg).synthesize)
+        return synth[0]
+
+    def voices() -> dict[str, dict]:
+        return actions.voice_catalog(cfg.data_dir, cfg.tts_voice)
 
     def parse_day(value: str) -> date:
         try:
@@ -147,9 +166,48 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
             "workspace": cfg.talk_workspace,
             "pending": pending,
             "audit": log.entries(limit=50),
-            "settings": asdict(actions.SettingsStore(cfg.data_dir, cfg.tts_voice).get()),
-            "voices": actions.VOICES,
+            "settings": asdict(settings_store.get()),
+            "voices": voices(),
+            "base_persona": re.sub(r"\n(?!\d\.)\s*", " ", PERSONA),  # unwrap source lines, keep "1." / "2."
+            "limits": {"length_scale": [actions.LENGTH_SCALE_MIN, actions.LENGTH_SCALE_MAX],
+                       "reply_lengths": actions.REPLY_LENGTHS, "personality": actions.PERSONALITY_MAX},
         }
+
+    @api.put("/talk/settings")
+    def talk_settings_put(body: dict = Body(...)):
+        """Owner edits from this computer (loopback only): applied directly, no spoken confirmation. The next
+        Talk turn reads talk_settings.json again, so the change is heard on the very next reply."""
+        unknown = set(body) - SETTINGS_KEYS
+        if unknown:
+            raise HTTPException(422, f"unknown setting(s): {', '.join(sorted(unknown))}")
+        try:
+            changes = actions.validate_settings(body, voices=voices())
+        except actions.Invalid as e:
+            raise HTTPException(422, str(e)) from None
+        s = settings_store.apply(changes)
+        actions.ActionLog(cfg.data_dir).audit("changed", kind="settings", summary=f"Changed in the web UI: {', '.join(changes)}",
+                                              params=changes)
+        return asdict(s)
+
+    @api.post("/talk/preview")
+    def talk_preview(body: dict = Body(...)):
+        """WAV of a short sample in the given voice/rate (unsaved values allowed), to listen before choosing."""
+        text = " ".join(str(body.get("text") or PREVIEW_TEXT).split())[:PREVIEW_MAX]
+        params = {k: body[k] for k in ("voice", "length_scale") if k in body}
+        try:
+            p = actions.validate_settings(params, voices=voices()) if params else {}
+        except actions.Invalid as e:
+            raise HTTPException(422, str(e)) from None
+        current = settings_store.get()
+        with tempfile.TemporaryDirectory(prefix="orbit-preview-") as tmp:
+            out = Path(tmp) / "preview.wav"
+            try:
+                get_tts()(text, out, voice=p.get("voice", current.voice),
+                          length_scale=p.get("length_scale", current.length_scale), strict=True)
+            except Exception as e:  # noqa: BLE001 - e.g. the voice download failed: say so in the UI
+                raise HTTPException(502, f"could not synthesize the preview: {e}") from e
+            data = out.read_bytes()
+        return Response(data, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
     @api.get("/pairing.png")
     def pairing_png():

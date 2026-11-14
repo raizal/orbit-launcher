@@ -40,6 +40,27 @@ REPLY_LENGTHS = {
     "long": "4 to 7 sentences (still spoken, no lists)",
 }
 PERSONALITY_MAX = 600
+VOICE_NAME_RE = re.compile(r"en_[A-Z]{2}-[a-z0-9_]+-(x_low|low|medium|high)")
+
+
+def installed_voices(data_dir: Path) -> set[str]:
+    """English Piper voices already downloaded into <data_dir>/voices/ (model + config both present)."""
+    d = Path(data_dir) / "voices"
+    if not d.is_dir():
+        return set()
+    return {m.name[:-len(".onnx")] for m in d.glob("en_*.onnx")
+            if VOICE_NAME_RE.fullmatch(m.name[:-len(".onnx")]) and m.with_name(m.name + ".json").exists()}
+
+
+def voice_catalog(data_dir: Path, default_voice: str) -> dict[str, dict]:
+    """Every voice the web UI may pick: the curated list plus any other installed English voice (and the
+    config's default voice). name -> {label, installed}."""
+    have = installed_voices(data_dir)
+    names = [*VOICES, *sorted(have - set(VOICES))]
+    if default_voice not in names:
+        names.append(default_voice)
+    return {n: {"label": VOICES.get(n) or ("config default voice" if n == default_voice else "installed voice"),
+                "installed": n in have} for n in names}
 
 
 @dataclass
@@ -246,27 +267,34 @@ def validate(kind: str, params: dict, refs: WorkspaceRefs) -> dict:
         if k := _enum(params, "kind", MEMORY_KINDS):
             out["kind"] = k
     elif kind == "settings":
-        if "voice" in params:
-            if params["voice"] not in VOICES:
-                raise Invalid(f"I don't have the voice {params['voice']!r}; I can use {', '.join(VOICES)}")
-            out["voice"] = params["voice"]
-        if "length_scale" in params:
-            try:
-                ls = round(float(params["length_scale"]), 2)
-            except (TypeError, ValueError):
-                raise Invalid("the speaking rate must be a number") from None
-            if not LENGTH_SCALE_MIN <= ls <= LENGTH_SCALE_MAX:
-                raise Invalid(f"the speaking rate must stay between {LENGTH_SCALE_MIN} and {LENGTH_SCALE_MAX}")
-            out["length_scale"] = ls
-        if "personality" in params:
-            p = params["personality"]
-            if not isinstance(p, str) or len(p.strip()) > PERSONALITY_MAX:
-                raise Invalid(f"the personality must be text of at most {PERSONALITY_MAX} characters")
-            out["personality"] = " ".join(p.split())
-        if "reply_length" in params:
-            out["reply_length"] = _enum(params, "reply_length", tuple(REPLY_LENGTHS))
-        if not out:
-            raise Invalid("no setting to change")
+        out = validate_settings(params)
+    return out
+
+
+def validate_settings(params: dict, voices=VOICES) -> dict:
+    """Talk settings (spoken confirm flow uses the curated `VOICES`; the web UI also allows installed ones)."""
+    out: dict = {}
+    if "voice" in params:
+        if params["voice"] not in voices:
+            raise Invalid(f"I don't have the voice {params['voice']!r}; I can use {', '.join(voices)}")
+        out["voice"] = params["voice"]
+    if "length_scale" in params:
+        try:
+            ls = round(float(params["length_scale"]), 2)
+        except (TypeError, ValueError):
+            raise Invalid("the speaking rate must be a number") from None
+        if not LENGTH_SCALE_MIN <= ls <= LENGTH_SCALE_MAX:
+            raise Invalid(f"the speaking rate must stay between {LENGTH_SCALE_MIN} and {LENGTH_SCALE_MAX}")
+        out["length_scale"] = ls
+    if "personality" in params:
+        p = params["personality"]
+        if not isinstance(p, str) or len(p.strip()) > PERSONALITY_MAX:
+            raise Invalid(f"the personality must be text of at most {PERSONALITY_MAX} characters")
+        out["personality"] = " ".join(p.split())
+    if "reply_length" in params:
+        out["reply_length"] = _enum(params, "reply_length", tuple(REPLY_LENGTHS))
+    if not out:
+        raise Invalid("no setting to change")
     return out
 
 

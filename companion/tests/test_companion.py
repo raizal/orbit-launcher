@@ -302,12 +302,12 @@ def test_anthropic_provider_parses_structured_output(client, store, cfg, monkeyp
 # --- local web UI ---------------------------------------------------------------------------------
 
 
-def ui_client(cfg, store, host="testclient"):
+def ui_client(cfg, store, host="testclient", tts=None):
     from orbit_notes.ui import mount_ui
 
     app = create_app(cfg, store)
     queued = []
-    mount_ui(app, cfg, store, queued.append)
+    mount_ui(app, cfg, store, queued.append, tts=tts)
     c = TestClient(app, client=(host, 50000))
     c.queued = queued
     return c

@@ -13,6 +13,18 @@
   let showSource = $state(false)
   let talk = $state(null) // { workspace, pending, audit, settings, voices }
   let showTalk = $state(false)
+  // Talk settings form: a draft edited locally, saved with PUT /talk/settings.
+  let draft = $state(null) // { voice, length_scale, reply_length, personality }
+  let saving = $state(false)
+  let savedMsg = $state('')
+  let previewing = $state(null) // voice name being synthesized
+  let playing = $state(null) // voice name whose preview is playing
+  let player = null
+  const SETTING_KEYS = ['voice', 'length_scale', 'reply_length', 'personality']
+  const changes = $derived(draft && talk ? Object.fromEntries(SETTING_KEYS
+    .filter((k) => (k === 'personality' ? draft[k].trim().split(/\s+/).join(' ') : draft[k]) !== talk.settings[k])
+    .map((k) => [k, draft[k]])) : {})
+  const dirty = $derived(Object.keys(changes).length > 0)
   const page = $derived(diary?.markdown ? renderDiary(diary.markdown) : null)
   let error = $state('')
 
@@ -28,7 +40,10 @@
   }
 
   async function loadOverview() {
+    const wasDirty = dirty
     ;[status, days, talk] = await Promise.all([api.status(), api.days(), api.talk()])
+    // Follow changes made meanwhile (e.g. confirmed by voice on the watch) unless the form has unsaved edits.
+    if (draft && !wasDirty) draft = pickSettings(talk.settings)
     if (!day) day = days[0]?.date ?? todayIso()
   }
 
@@ -63,6 +78,61 @@
     })
   }
 
+  function openTalk() {
+    draft = talk ? { ...pickSettings(talk.settings) } : null
+    savedMsg = ''
+    showTalk = true
+  }
+
+  function closeTalk() {
+    stopPreview()
+    showTalk = false
+  }
+
+  function pickSettings(s) {
+    return Object.fromEntries(SETTING_KEYS.map((k) => [k, s[k] ?? '']))
+  }
+
+  async function saveSettings(c = changes) {
+    saving = true
+    savedMsg = ''
+    await guard(async () => {
+      const s = await api.saveTalkSettings(c)
+      talk = { ...talk, settings: s }
+      // Only the saved keys: other unsaved edits in the form stay (e.g. after "Reset personality").
+      for (const k of Object.keys(c)) draft[k] = s[k] ?? ''
+      savedMsg = 'Saved. The next Talk reply uses these settings.'
+    })
+    saving = false
+  }
+
+  function resetPersonality() {
+    if (talk.settings.personality && !confirm('Remove your personality instructions and go back to the base persona?')) return
+    saveSettings({ personality: '' })
+  }
+
+  function stopPreview() {
+    player?.pause()
+    if (player?.src) URL.revokeObjectURL(player.src)
+    player = null
+    playing = null
+  }
+
+  async function preview(voice) {
+    stopPreview()
+    previewing = voice
+    await guard(async () => {
+      const blob = await api.previewVoice(voice, Number(draft.length_scale))
+      player = new Audio(URL.createObjectURL(blob))
+      player.onended = stopPreview
+      playing = voice
+      await player.play()
+      // Mark the voice as downloaded (the preview fetched it if needed).
+      if (talk.voices[voice]) talk.voices[voice].installed = true
+    })
+    previewing = null
+  }
+
   onMount(() => {
     guard(async () => {
       await loadOverview()
@@ -77,7 +147,7 @@
   })
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), (showTalk = false))} />
+<svelte:window onkeydown={(e) => e.key === 'Escape' && ((showPair = false), closeTalk())} />
 
 <header>
   <div class="brand">
@@ -95,7 +165,7 @@
       {#if !status.worker}<span class="warn">transcription worker off</span>{/if}
     </div>
   {/if}
-  <button onclick={() => (showTalk = true)}>
+  <button onclick={openTalk}>
     Talk assistant{#if talk?.pending && !talk.pending.expired}<span class="pending-dot" title="An action waits for confirmation"></span>{/if}
   </button>
   <button onclick={() => (showPair = true)}>Pair watch</button>
@@ -197,7 +267,7 @@
 
 {#if showTalk && talk}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="modal" role="presentation" onclick={(e) => e.target === e.currentTarget && (showTalk = false)}>
+  <div class="modal" role="presentation" onclick={(e) => e.target === e.currentTarget && closeTalk()}>
     <div class="card talk-card" role="dialog" aria-modal="true" aria-label="Talk assistant">
       <h2>Talk assistant</h2>
       <p class="muted">BB workspace: {talk.workspace === 'bb' ? 'connected (read on demand, actions need your spoken yes)' : 'off'}</p>
@@ -218,14 +288,71 @@
       {/if}
 
       <h3>Voice &amp; personality</h3>
-      <dl class="meta">
-        <dt>Voice</dt><dd>{talk.settings.voice} <span class="muted">{talk.voices[talk.settings.voice] ?? ''}</span></dd>
-        <dt>Speaking rate</dt><dd>{talk.settings.length_scale.toFixed(2)} <span class="muted">(Piper length scale; higher = slower)</span></dd>
-        <dt>Reply length</dt><dd>{talk.settings.reply_length}</dd>
-        <dt>Personality</dt><dd>{talk.settings.personality || '— (base persona)'}</dd>
-        {#if talk.settings.updated_at}<dt>Changed</dt><dd>{fmtTime(talk.settings.updated_at)}</dd>{/if}
-      </dl>
-      <p class="muted small-print">Change these by asking on the watch, e.g. “speak a bit slower”.</p>
+      {#if draft}
+        <div class="settings">
+          <div class="field">
+            <span class="field-label">Voice</span>
+            <ul class="voices">
+              {#each Object.entries(talk.voices) as [name, v] (name)}
+                <li class:selected={draft.voice === name}>
+                  <label>
+                    <input type="radio" name="voice" value={name} bind:group={draft.voice} />
+                    <span class="voice-name">{name}</span>
+                    <span class="muted">{v.label}{v.installed ? '' : ' · downloads on first use'}</span>
+                  </label>
+                  {#if playing === name}
+                    <button class="small" onclick={stopPreview}>■ Stop</button>
+                  {:else}
+                    <button class="small" onclick={() => preview(name)} disabled={previewing !== null}>
+                      {previewing === name ? 'Loading…' : '▶ Preview'}
+                    </button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
+
+          <label class="field">
+            <span class="field-label">Speaking rate <b class="num">{Number(draft.length_scale).toFixed(2)}</b>
+              <span class="muted">(Piper length scale; higher = slower; previews use it)</span></span>
+            <input type="range" min={talk.limits.length_scale[0]} max={talk.limits.length_scale[1]} step="0.05"
+                   bind:value={draft.length_scale} />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Reply length</span>
+            <select bind:value={draft.reply_length}>
+              {#each Object.entries(talk.limits.reply_lengths) as [k, desc]}
+                <option value={k}>{k} — {desc}</option>
+              {/each}
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Personality / style
+              <span class="muted">(layered on the base persona; the fixed rules always stay)</span></span>
+            <textarea rows="4" maxlength={talk.limits.personality} bind:value={draft.personality}
+                      placeholder="Empty = base persona only. E.g. “Cheerful and a bit playful; call me Raiz.”"></textarea>
+            <span class="muted small-print">{draft.personality.length} / {talk.limits.personality}</span>
+          </label>
+          <details class="persona">
+            <summary>Base persona (fixed)</summary>
+            <pre>{talk.base_persona}</pre>
+          </details>
+
+          <div class="actions">
+            <button class="primary" onclick={() => saveSettings()} disabled={!dirty || saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button onclick={() => (draft = pickSettings(talk.settings))} disabled={!dirty || saving}>Revert</button>
+            <button onclick={resetPersonality} disabled={saving || !talk.settings.personality}>Reset personality to base persona</button>
+            {#if savedMsg && !dirty}<span class="ok">{savedMsg}</span>{/if}
+          </div>
+          {#if talk.settings.updated_at}
+            <p class="muted small-print">Last changed {fmtTime(talk.settings.updated_at)}. You can also ask on the watch, e.g. “speak a bit slower”.</p>
+          {/if}
+        </div>
+      {/if}
 
       <h3>Action log</h3>
       {#if talk.audit.length === 0}<p class="muted">No actions yet.</p>{/if}
@@ -242,7 +369,7 @@
           </li>
         {/each}
       </ul>
-      <button onclick={() => (showTalk = false)}>Close</button>
+      <button onclick={closeTalk}>Close</button>
     </div>
   </div>
 {/if}
@@ -328,7 +455,27 @@
   .audit li div, .audit li code { flex-basis: 100%; }
   .audit code { font-size: 11.5px; word-break: break-all; }
   .audit .err { color: var(--rec); }
-  .badge.ev-executed { color: var(--ok); }
+  .badge.ev-executed, .badge.ev-changed { color: var(--ok); }
+  .settings { display: flex; flex-direction: column; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .field-label { font-weight: 600; }
+  .field-label .muted { font-weight: 400; }
+  .voices { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+  .voices li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; }
+  .voices li.selected { border-color: var(--accent); }
+  .voices label { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
+  .voices input { accent-color: var(--accent); align-self: center; }
+  .voice-name { font-family: 'Space Grotesk', Inter, sans-serif; }
+  input[type='range'] { accent-color: var(--accent); width: 100%; }
+  select, textarea {
+    font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 10px;
+  }
+  textarea { resize: vertical; line-height: 1.45; }
+  .persona summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .persona pre { font-size: 12px; }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ok { color: var(--ok); font-size: 13px; }
   .badge.ev-failed, .badge.ev-rejected { color: var(--rec); }
   .badge.ev-proposed, .badge.ev-confirmed { color: var(--info); }
 

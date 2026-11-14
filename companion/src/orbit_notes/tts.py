@@ -46,13 +46,17 @@ class PiperTTS:
                 self._voices[name] = PiperVoice.load(self.model_path(name))
             return self._voices[name]
 
-    def synthesize(self, text: str, out: Path, voice: str | None = None, length_scale: float | None = None) -> None:
-        """Write mono 16-bit WAV of `text` to `out` (atomically). An unusable voice falls back to the config's."""
+    def synthesize(self, text: str, out: Path, voice: str | None = None, length_scale: float | None = None,
+                   strict: bool = False) -> None:
+        """Write mono 16-bit WAV of `text` to `out` (atomically). An unusable voice falls back to the config's,
+        unless `strict` (voice previews: hearing the wrong voice would mislead)."""
         from piper import SynthesisConfig
 
         try:
             v = self.voice(voice)
         except Exception as e:  # noqa: BLE001 - e.g. download failed: still answer, in the default voice
+            if strict:
+                raise
             print(f"piper: voice {voice!r} unavailable ({e}); using {self.cfg.tts_voice!r}")
             v = self.voice(None)
         buf = io.BytesIO()

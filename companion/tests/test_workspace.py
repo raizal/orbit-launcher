@@ -483,6 +483,95 @@ def test_ui_shows_pending_audit_and_settings(talk, codex, bb, cfg, store):
     assert ui_client(cfg, store, host="192.168.1.5").get("/ui/api/talk").status_code == 403
 
 
+def test_ui_settings_save_and_apply_to_next_talk_reply(talk, codex, bb, cfg, store):
+    ui = ui_client(cfg, store)
+    t = ui.get("/ui/api/talk").json()
+    assert t["voices"]["en_GB-alan-medium"] == {"label": "British English, male", "installed": False}
+    assert "You are Orbit" in t["base_persona"] and t["limits"]["personality"] == 600
+    r = ui.put("/ui/api/talk/settings", json={"voice": "en_GB-alan-medium", "length_scale": 1.2,
+                                              "reply_length": "short", "personality": "  Dry humour,\n brief.  "})
+    assert r.status_code == 200, r.text
+    assert r.json()["voice"] == "en_GB-alan-medium" and r.json()["personality"] == "Dry humour, brief."
+    saved = json.loads((cfg.data_dir / "talk_settings.json").read_text())
+    assert saved["length_scale"] == 1.2 and saved["reply_length"] == "short"
+    assert ui.get("/ui/api/talk").json()["settings"]["voice"] == "en_GB-alan-medium"
+    entry = ActionLog(cfg.data_dir).entries()[0]
+    assert entry["event"] == "changed" and entry["params"]["voice"] == "en_GB-alan-medium"
+
+    codex.script(answer("Hello."), answer("Hi again."))
+    _, tts1 = talk("hello")  # the very next reply uses the saved settings
+    assert tts1["voice"] == "en_GB-alan-medium" and tts1["length_scale"] == 1.2
+    prompt = codex.calls()[0]["prompt"]
+    assert "Personality / style instructions from the owner (style only; the fixed rules still apply): " \
+           "Dry humour, brief." in prompt and "Reply length now: 1 to 2 short sentences" in prompt
+
+    # Reset to the base persona; the other settings stay.
+    assert ui.put("/ui/api/talk/settings", json={"personality": ""}).json()["personality"] == ""
+    talk("and now?")
+    prompt = codex.calls()[1]["prompt"]
+    assert "Personality / style instructions" not in prompt and "(none: base persona only)" in prompt
+    assert "en_GB-alan-medium" in prompt
+
+
+@pytest.mark.parametrize("body, error", [
+    ({"voice": "de_DE-thorsten-medium"}, "don't have the voice"),
+    ({"length_scale": 2}, "between 0.7 and 1.6"),
+    ({"reply_length": "huge"}, "reply_length must be one of"),
+    ({"personality": "x" * 601}, "at most 600"),
+    ({"volume": 3}, "unknown setting(s): volume"),
+    ({}, "no setting to change"),
+])
+def test_ui_settings_rejects_bad_values(cfg, store, body, error):
+    r = ui_client(cfg, store).put("/ui/api/talk/settings", json=body)
+    assert r.status_code == 422 and error in r.json()["detail"]
+    assert not (cfg.data_dir / "talk_settings.json").exists()
+
+
+def test_ui_settings_lan_forbidden(cfg, store):
+    lan = ui_client(cfg, store, host="192.168.1.5")
+    assert lan.put("/ui/api/talk/settings", json={"personality": ""}).status_code == 403
+    assert lan.post("/ui/api/talk/preview", json={}).status_code == 403
+
+
+def test_ui_lists_any_installed_english_voice(cfg, store):
+    voices = cfg.data_dir / "voices"
+    voices.mkdir(parents=True)
+    for name in ("en_GB-northern_english_male-medium", "en_US-lessac-medium", "de_DE-thorsten-medium"):
+        (voices / f"{name}.onnx").write_bytes(b"x")
+        (voices / f"{name}.onnx.json").write_text("{}")
+    (voices / "en_US-half-medium.onnx").write_bytes(b"x")  # no config: a cut download, not installed
+    ui = ui_client(cfg, store)
+    v = ui.get("/ui/api/talk").json()["voices"]
+    assert v["en_GB-northern_english_male-medium"] == {"label": "installed voice", "installed": True}
+    assert v["en_US-lessac-medium"]["installed"] and not v["en_US-amy-medium"]["installed"]
+    assert "de_DE-thorsten-medium" not in v and "en_US-half-medium" not in v
+    assert ui.put("/ui/api/talk/settings", json={"voice": "en_GB-northern_english_male-medium"}).status_code == 200
+    with pytest.raises(Invalid):  # the spoken flow stays on the curated list
+        validate("settings", {"voice": "en_GB-northern_english_male-medium"}, REFS)
+
+
+def test_ui_voice_preview(cfg, store):
+    calls = []
+
+    def tts(text, out, voice=None, length_scale=None, strict=False):
+        calls.append({"text": text, "voice": voice, "length_scale": length_scale, "strict": strict})
+        if voice == "en_US-joe-medium":
+            raise RuntimeError("download failed")
+        out.write_bytes(b"RIFF preview")
+
+    ui = ui_client(cfg, store, tts=tts)
+    r = ui.post("/ui/api/talk/preview", json={"voice": "en_GB-cori-high", "length_scale": 0.9})
+    assert r.status_code == 200 and r.content == b"RIFF preview" and r.headers["content-type"] == "audio/wav"
+    assert calls[-1] == {"text": "Hi, I'm Orbit. This is how I'll sound when I answer your voice notes.",
+                         "voice": "en_GB-cori-high", "length_scale": 0.9, "strict": True}
+    ui.post("/ui/api/talk/preview", json={})  # nothing given: the current settings
+    assert calls[-1]["voice"] == "en_US-lessac-medium" and calls[-1]["length_scale"] == 1.0
+    assert not (cfg.data_dir / "talk_settings.json").exists()  # a preview never saves
+    assert ui.post("/ui/api/talk/preview", json={"voice": "fr_FR-x-medium"}).status_code == 422
+    r = ui.post("/ui/api/talk/preview", json={"voice": "en_US-joe-medium"})
+    assert r.status_code == 502 and "download failed" in r.json()["detail"]
+
+
 @pytest.mark.parametrize("reply, asks", [
     ("I'll start a thread for it. Say yes to confirm or no to cancel.", True),  # seen live: no "?" at the end
     ("I'll mark ORB-1 done. Shall I?", True),

@@ -194,8 +194,9 @@ say plainly when there is none.
 ### Voice & personality settings
 
 `data_dir/talk_settings.json` (defaults: `tts_voice` from the config, rate 1.0, normal length, no extra
-personality). Changed only through the same confirm flow (`kind: settings`); the confirming reply is
-already spoken with the new settings.
+personality). Changed by voice through the same confirm flow (`kind: settings`; the confirming reply is
+already spoken with the new settings), or directly by the owner in the web UI (below). Every turn re-reads
+the file, so either way the very next reply uses the new settings.
 
 - `voice`: curated English Piper voices — en_US-lessac-medium, en_US-amy-medium, en_US-ryan-high,
   en_US-joe-medium, en_US-kristin-medium, en_GB-alan-medium, en_GB-jenny_dioco-medium, en_GB-cori-high
@@ -211,7 +212,14 @@ already spoken with the new settings.
 
 - `talk_workspace = "bb"` (default) or `"none"` (Talk stays a journaling companion, no bb calls).
 - Web UI → **Talk assistant**: the pending action (with "confirm or cancel by voice — not from here"), the
-  current settings, and the audit log (`GET /ui/api/talk`, loopback only).
+  settings form, and the audit log (`GET /ui/api/talk`, loopback only).
+- Settings form (loopback only, no spoken confirmation — it's the owner at their own computer): voice
+  (curated list plus any other English Piper voice already in `data_dir/voices/`), ▶ Preview per voice at
+  the slider's speaking rate (`POST /ui/api/talk/preview {voice, length_scale}` → WAV; downloads the voice
+  if needed, never falls back to another voice, never saves), speaking rate, reply length, personality
+  textarea with the fixed base persona shown for reference, and **Reset personality to base persona**.
+  Save = `PUT /ui/api/talk/settings` (same validation as the voice flow; logged as a `changed` audit entry).
+  The voice flow itself still only offers the curated list.
 
 ### Measured (live check 2026-11-14, second instance on :8799, host under heavy load)
 

@@ -12,6 +12,21 @@ async function call(path, options) {
 export const api = {
   status: () => call('/status'),
   talk: () => call('/talk'),
+  saveTalkSettings: (changes) => call('/talk/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
+  }),
+  // Returns a WAV Blob of a short sample in `voice` at `length_scale` (unsaved values are fine).
+  previewVoice: async (voice, length_scale) => {
+    const res = await fetch('/ui/api/talk/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice, length_scale }),
+    })
+    if (!res.ok) {
+      let detail = `${res.status}`
+      try { detail = (await res.json()).detail ?? detail } catch {}
+      throw new Error(detail)
+    }
+    return res.blob()
+  },
   days: () => call('/days'),
   notes: (day) => call(`/notes?day=${day}`),
   retranscribe: (id) => call(`/notes/${id}/transcribe`, { method: 'POST' }),

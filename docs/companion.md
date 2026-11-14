@@ -12,7 +12,12 @@ orbit-notes diary 2026-11-13      # build the diary page for one day
 orbit-notes diary --yesterday     # for a daily cron / scheduled task
 orbit-notes inbox add --title "…" [--body "…"]   # send a short item to the watch (docs/inbox.md)
 orbit-notes inbox list | read <id>
+orbit-notes publish-apk app/build/outputs/apk/release/app-release.apk   # offer a watch build over Wi-Fi
 ```
+
+## App updates
+
+`publish-apk <apk> [--version-code N --version-name X] [--force]` copies the APK to `<data_dir>/app/orbit-<code>.apk` and writes `<data_dir>/app/latest.json` (`version_code`, `version_name`, `sha256`, `size`, `published_at`). versionCode/versionName come from the `output-metadata.json` Gradle writes next to the APK (applicationId must be `com.orbit`). A versionCode not higher than the published one is refused unless `--force`. Atomic (temp file + rename); the current and previous APK are kept. Served as `GET /v1/app/latest` + `GET /v1/app/apk` (bearer token; see `docs/voice-notes.md` → App updates). The web UI header shows the published version. No restart needed: the server reads `latest.json` per request.
 
 ## Config (`config.toml` + env overrides)
 

@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from . import appupdate
 from .config import Config
 from .inbox import shared as shared_inbox
 from .inbox_api import mount_inbox
@@ -143,6 +144,7 @@ def create_app(
         return {"conversation": conversation, "turns": turns}
 
     mount_inbox(app, require_token, *shared_inbox(cfg))  # docs/inbox.md
+    app.include_router(appupdate.router(cfg.data_dir, require_token))  # OTA watch app updates
     return app
 
 

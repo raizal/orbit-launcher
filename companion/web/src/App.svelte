@@ -191,6 +191,11 @@
       </span>
       <span class="muted">whisper {status.whisper_model} · diary LLM {status.llm_provider}</span>
       {#if !status.worker}<span class="warn">transcription worker off</span>{/if}
+      {#if status.app}
+        <span class="muted" title={`Published ${status.app.published_at} · sha256 ${status.app.sha256}`}>
+          watch app {status.app.version_name} (#{status.app.version_code})
+        </span>
+      {:else}<span class="muted">no watch app published</span>{/if}
     </div>
   {/if}
   <button onclick={openTalk}>

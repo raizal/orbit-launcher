@@ -2,6 +2,7 @@ package com.orbit
 
 import android.app.Application
 import com.orbit.voice.inbox.InboxSync
+import com.orbit.voice.update.AppUpdates
 import com.orbit.voice.upload.Uploads
 import java.io.File
 
@@ -12,6 +13,7 @@ class OrbitApp : Application() {
         if (processName() == packageName) {
             Uploads.init(this)
             InboxSync.init(this)
+            AppUpdates.init(this)
         }
     }
 

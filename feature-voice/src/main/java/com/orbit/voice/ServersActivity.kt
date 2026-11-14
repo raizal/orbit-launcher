@@ -1,6 +1,7 @@
 package com.orbit.voice
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -48,6 +50,9 @@ import com.orbit.core.OrbitColors
 import com.orbit.core.OrbitFonts
 import com.orbit.core.RoundScreen
 import com.orbit.core.SvgIcon
+import com.orbit.voice.update.AppUpdates
+import com.orbit.voice.update.UpdateActivity
+import com.orbit.voice.update.UpdateInfo
 import com.orbit.voice.upload.Discovery
 import com.orbit.voice.upload.FoundServer
 import com.orbit.voice.upload.OrbitClient
@@ -86,14 +91,17 @@ class ServersActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION), 1)
         }
         setContent {
+            val update by AppUpdates.ready.collectAsState()
             RoundScreen {
                 ServersScreen(
                     status = status,
                     paired = paired,
                     pairedHost = pairedHost,
                     others = others,
-                    onRefresh = ::refresh,
+                    update = update,
+                    onRefresh = { refresh(byUser = true) },
                     onScanQr = ::startQrScan,
+                    onUpdate = { startActivity(Intent(this, UpdateActivity::class.java)) },
                 )
             }
         }
@@ -128,7 +136,8 @@ class ServersActivity : ComponentActivity() {
         refresh()
     }
 
-    private fun refresh() {
+    /** [byUser]: the paired row was tapped — also check for an app update now, past the 30-min limit. */
+    private fun refresh(byUser: Boolean = false) {
         lifecycleScope.launch {
             val wifi = WifiNow.read(this@ServersActivity)
             if (wifi == null) {
@@ -153,7 +162,10 @@ class ServersActivity : ComponentActivity() {
             pairedHost = found.first?.also { prefs.lastIp = it.ip }
             others = found.second
             status = "Home Wi-Fi · ${listOfNotNull(found.first).size + found.second.size} found"
-            if (pairedHost != null) Uploads.kick(this@ServersActivity, fresh = true)
+            if (pairedHost != null) {
+                Uploads.kick(this@ServersActivity, fresh = true)
+                AppUpdates.checkSoon(this@ServersActivity, force = byUser) // companion just answered: a cheap moment
+            }
         }
     }
 }
@@ -169,8 +181,10 @@ private fun ServersScreen(
     paired: Pairing?,
     pairedHost: FoundServer?,
     others: List<FoundServer>,
+    update: UpdateInfo?,
     onRefresh: () -> Unit,
     onScanQr: () -> Unit,
+    onUpdate: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         CurvedText("SEND NOTES TO", top = true, color = OrbitColors.Muted, sizeSp = 13f, letterSpacingPx = 2.5f)
@@ -192,8 +206,13 @@ private fun ServersScreen(
             )
             top += 74
         }
-        others.firstOrNull()?.let {
-            ServerRow(top, "${it.ip}:${it.port}", "Found by scan · not paired", highlighted = false, onClick = onScanQr)
+        // One row fits above the Pair button: an offered update wins over an unpaired scan result.
+        if (update != null) {
+            ServerRow(top, "Update available", "v${update.version_name} · tap to install", highlighted = false, onClick = onUpdate)
+        } else {
+            others.firstOrNull()?.let {
+                ServerRow(top, "${it.ip}:${it.port}", "Found by scan · not paired", highlighted = false, onClick = onScanQr)
+            }
         }
         Box(
             Modifier

@@ -20,6 +20,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.orbit.voice.NoteStore
 import com.orbit.voice.inbox.InboxSync
+import com.orbit.voice.update.AppUpdates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -152,6 +153,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
         }
         if (sent > 0) InboxSync.kick(applicationContext) // a cheap moment: we just reached the companion
+        AppUpdates.checkSoon(applicationContext) // a cheap moment: on home Wi-Fi, companion just answered
         if (transient) Result.retry() else Result.success()
     }
 

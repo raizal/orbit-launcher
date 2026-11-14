@@ -31,6 +31,8 @@ import com.orbit.voice.VoiceEntry
 import com.orbit.voice.inbox.InboxItem
 import com.orbit.voice.inbox.InboxListActivity
 import com.orbit.voice.inbox.InboxSync
+import com.orbit.voice.update.Installer
+import com.orbit.voice.update.UpdateLogic
 import com.orbit.voice.upload.Discovery
 import com.orbit.voice.upload.NoteState
 import com.orbit.voice.upload.OrbitClient
@@ -137,6 +139,8 @@ class TalkActivity : ComponentActivity() {
         ContextCompat.registerReceiver(this, receiver, IntentFilter(RecorderState.ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
         InboxSync.load(this)
         openAbout(intent)
+        // An app update must not cut off a turn or a reply being played (docs/voice-notes.md → App updates).
+        Installer.registerTalk(this) { UpdateLogic.talkBlocks(ui) || player != null || playingStem != null }
         setContent {
             val inbox by InboxSync.state.collectAsState()
             RoundScreen {
@@ -227,6 +231,7 @@ class TalkActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        Installer.unregisterTalk(this)
         unregisterReceiver(receiver)
         handler.removeCallbacks(releaseScreen)
         releasePlayer()

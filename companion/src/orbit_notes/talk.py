@@ -334,8 +334,10 @@ class Talker:
                 raise TalkError(f"codex exec failed ({r.returncode}): " + " | ".join(tail))
             return answer, thread_id or session
 
-    def ask(self, prompt: str, session: str | None, day: date, first: Callable[[], str]) -> tuple[dict, str | None]:
-        """A turn in today's session; a new session (with `first()` context in front) if there is none or it broke."""
+    def ask(self, prompt: str, session: str | None, conversation: str | None,
+            first: Callable[[], str]) -> tuple[dict, str | None]:
+        """A turn in the conversation's session; a new session (with `first()` context in front) if there is none
+        or it broke."""
         if session:
             try:
                 raw, sid = self.codex(prompt, session)
@@ -345,8 +347,8 @@ class Talker:
                     raise
                 print(f"talk: resuming session {session} failed ({e}); starting a new one")
         raw, sid = self.codex(f"{PERSONA}\n\n{first()}\n\n{prompt}", None)
-        if sid:
-            self.store.set_talk_session(day, sid)
+        if sid and conversation:
+            self.store.set_conversation_session(conversation, sid)
         return parse_answer(raw), sid
 
     def workspace_index(self):
@@ -365,7 +367,6 @@ class Talker:
         if self.cfg.talk_provider != "codex":
             raise TalkError(f"talk_provider is {self.cfg.talk_provider!r}; set it to \"codex\" for spoken feedback")
         timings = {}
-        day = date.fromisoformat(note.local_date)
         settings = self.settings.get()
         pending, expired = self.actions.pending(), None
         if pending and pending.expired():
@@ -376,14 +377,15 @@ class Talker:
         t = time.monotonic()
         idx, index_text = self.workspace_index()
         timings["index"] = time.monotonic() - t
-        session = self.store.talk_session(day)
+        conversation = note.conversation or self.store.latest_conversation()
+        session = self.store.conversation_session(conversation)
         if idx and session and self._index_sent.get(session) == idx.taken_at:
             index_text = (f"BB WORKSPACE: unchanged since the snapshot taken {idx.taken_at:%H:%M} "
                           "(shown earlier in this conversation).")
 
         t = time.monotonic()
         prompt = self.turn_prompt(note, transcript, settings, pending, expired, index_text)
-        answer, session = self.ask(prompt, session, day, lambda: self.context_prompt(note))
+        answer, session = self.ask(prompt, session, conversation, lambda: self.context_prompt(note))
         timings["codex"] = time.monotonic() - t
         if idx and session:
             self._index_sent[session] = idx.taken_at

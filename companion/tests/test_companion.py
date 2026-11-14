@@ -445,8 +445,8 @@ def fake_tts(spoken, calls=None):
     return tts
 
 
-def add_talk(client, store, started_at, text=None):
-    meta, data = make_note(started_at=started_at, audio=b"talk " + started_at.encode(), mode="talk")
+def add_talk(client, store, started_at, text=None, **extra):
+    meta, data = make_note(started_at=started_at, audio=b"talk " + started_at.encode(), mode="talk", **extra)
     assert put(client, meta, data, filename="x").status_code == 201
     note = store.get(meta["id"])
     if text is not None:
@@ -468,8 +468,27 @@ def test_migration_adds_talk_columns_to_existing_db(tmp_path):
     note = store.get("a")
     assert note.mode is None and note.talk_status is None and note.transcript_status == "pending"
     Store(tmp_path)  # opening twice is a no-op
-    store.set_talk_session(date(2026, 11, 13), "s1")
-    assert store.talk_session(date(2026, 11, 13)) == "s1"
+
+
+def test_legacy_talk_notes_join_one_conversation_with_latest_session(tmp_path):
+    """Talk notes from the per-day-session version continue as one conversation (docs/talk.md)."""
+    old = SCHEMA.split("    conversation ")[0].rstrip().rstrip(",") + "\n);\n"
+    db = sqlite3.connect(tmp_path / "index.sqlite")
+    db.executescript(old)
+    db.executescript("CREATE TABLE talk_sessions (local_date TEXT PRIMARY KEY, session_id TEXT NOT NULL);")
+    for nid, day in (("t1", "2026-11-13"), ("t2", "2026-11-14")):
+        db.execute("INSERT INTO notes (id, path, sha256, started_at, started_utc, local_date, received_at, mode,"
+                   " talk_status) VALUES (?, 'notes/x.aac', 'ff', ?, ?, ?, 'now', 'talk', 'done')",
+                   (nid, f"{day}T07:00:00+07:00", f"{day}T00:00:00+00:00", day))
+    db.execute("INSERT INTO talk_sessions VALUES ('2026-11-13', 'old'), ('2026-11-14', 'newest')")
+    db.commit()
+    db.close()
+    store = Store(tmp_path)
+    cid = store.latest_conversation()
+    assert cid and store.get("t1").conversation == cid == store.get("t2").conversation
+    assert store.conversation_session(cid) == "newest"
+    Store(tmp_path)  # adopting happens once
+    assert store.latest_conversation() == cid
 
 
 def test_talk_mode_stored_in_index(client, store):
@@ -512,7 +531,7 @@ def test_reply_endpoint_states(client, store):
     assert w.status_code == 200 and w.content == b"RIFFwav" and w.headers["content-type"] == "audio/wav"
 
 
-def test_talk_one_codex_session_per_day(client, store, cfg, fake_codex):
+def test_talk_conversation_continues_across_days_until_new(client, store, cfg, fake_codex):
     spoken = []
     talker = Talker(cfg, store, tts=fake_tts(spoken))
     (cfg.diary_dir).mkdir(parents=True)
@@ -523,10 +542,11 @@ def test_talk_one_codex_session_per_day(client, store, cfg, fake_codex):
     first = add_talk(client, store, "2026-11-13T07:02:10+07:00", "Feeling a bit tired today")
     second = add_talk(client, store, "2026-11-13T21:00:00+07:00", "The day went better than expected")
     next_day = add_talk(client, store, "2026-11-14T08:00:00+07:00", "New day")
+    fresh = add_talk(client, store, "2026-11-14T09:00:00+07:00", "Something else entirely", conversation="new")
 
-    assert talker.run(first) and talker.run(second) and talker.run(next_day)
+    assert talker.run(first) and talker.run(second) and talker.run(next_day) and talker.run(fresh)
     calls = fake_codex()
-    assert len(calls) == 3
+    assert len(calls) == 4
 
     a = calls[0]["args"]
     assert a[:2] == ["exec", "--json"] and "resume" not in a
@@ -545,11 +565,16 @@ def test_talk_one_codex_session_per_day(client, store, cfg, fake_codex):
     assert "CURRENT TALK SETTINGS" in calls[1]["prompt"]  # settings + rules go with every turn
 
     c = calls[2]["args"]
-    assert "resume" not in c  # a new local date starts a new session
-    assert "There is no diary page for yesterday." in calls[2]["prompt"]  # no page for the 13th
-    assert "Feeling a bit tired" not in calls[2]["prompt"]  # yesterday's notes are not "earlier today"
-    assert store.talk_session(date(2026, 11, 13)) == "sess-0"
-    assert store.talk_session(date(2026, 11, 14)) == "sess-1"
+    assert c[:2] == ["exec", "resume"] and c[-2:] == ["sess-0", "-"]  # same conversation across midnight
+
+    d = calls[3]["args"]
+    assert "resume" not in d  # "conversation": "new" starts a new session
+    assert "There is no diary page for yesterday." in calls[3]["prompt"]  # no page for the 13th
+    assert "Feeling a bit tired" not in calls[3]["prompt"]  # yesterday's notes are not "earlier today"
+    assert first.conversation == second.conversation == store.get(next_day.id).conversation
+    assert store.get(fresh.id).conversation != first.conversation == next_day.conversation
+    assert store.conversation_session(first.conversation) == "sess-0"
+    assert store.conversation_session(store.get(fresh.id).conversation) == "sess-1"
 
     # Reply files, spoken text without markdown, status done.
     txt = store.audio_path(first).with_name(f"{first.stem}.reply.txt")
@@ -643,3 +668,27 @@ def test_ui_shows_talk_reply(client, store, cfg):
     n = ui.get("/ui/api/notes", params={"day": "2026-11-13"}).json()[0]
     assert (n["mode"], n["talk_status"], n["reply"], n["reply_audio"]) == ("talk", "done", "Hello.", True)
     assert ui.get(f"/ui/api/notes/{note.id}/reply.wav").content == b"RIFF"
+
+
+def test_talk_history_returns_latest_conversation(client, store, cfg):
+    assert client.get("/v1/talk/history").status_code == 401
+    assert client.get("/v1/talk/history", headers=AUTH).json() == {"conversation": None, "turns": []}
+    old = add_talk(client, store, "2026-11-13T07:00:00+07:00", "Old chat")
+    a = add_talk(client, store, "2026-11-14T08:00:00+07:00", "Morning thoughts", conversation="new")
+    b = add_talk(client, store, "2026-11-14T08:05:00+07:00")  # not transcribed yet
+    audio = store.audio_path(a)
+    audio.with_name(f"{a.stem}.reply.txt").write_text("Sounds like a calm start.\n")
+    audio.with_name(f"{a.stem}.reply.wav").write_bytes(b"RIFF")
+    store.set_talk_status(a.id, "done")
+    store.set_talk_status(b.id, "error", "no speech heard in the recording")
+
+    body = client.get("/v1/talk/history", headers=AUTH).json()
+    assert body["conversation"] == a.conversation != old.conversation
+    assert body["turns"] == [
+        {"id": a.id, "started_at": a.started_at, "transcript": "Morning thoughts", "status": "done",
+         "reply": "Sounds like a calm start.", "error": None, "audio": f"/v1/notes/{a.id}/reply.wav"},
+        {"id": b.id, "started_at": b.started_at, "transcript": None, "status": "error", "reply": None,
+         "error": "no speech heard in the recording", "audio": None},
+    ]
+    limited = client.get("/v1/talk/history", params={"limit": 1}, headers=AUTH).json()
+    assert [t["id"] for t in limited["turns"]] == [b.id]  # the newest turns are kept

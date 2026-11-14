@@ -7,6 +7,7 @@ import re
 import sqlite3
 import tempfile
 import threading
+import uuid
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -29,17 +30,23 @@ CREATE TABLE IF NOT EXISTS notes (
     received_at       TEXT NOT NULL,
     mode              TEXT,               -- sidecar `mode`: NULL = normal note, 'talk' = wants spoken feedback
     talk_status       TEXT,               -- talk notes: queued / transcribing / thinking / speaking / done / error
-    talk_error        TEXT
+    talk_error        TEXT,
+    conversation      TEXT                -- talk notes: the conversation they belong to (docs/talk.md)
 );
 CREATE INDEX IF NOT EXISTS notes_local_date ON notes(local_date);
 CREATE TABLE IF NOT EXISTS talk_sessions (
-    local_date TEXT PRIMARY KEY,          -- one Codex session per local date
+    local_date TEXT PRIMARY KEY,          -- legacy (one Codex session per local date); read once by the migration
     session_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS talk_conversations (
+    id          TEXT PRIMARY KEY,         -- "c-<hex>"; a conversation lasts until the watch starts a new one
+    session_id  TEXT,                     -- its Codex session (NULL until the first turn ran)
+    created_utc TEXT NOT NULL
 );
 """
 
 # Columns added after the first release; ALTERed into existing index.sqlite files on open.
-MIGRATIONS = (("mode", "TEXT"), ("talk_status", "TEXT"), ("talk_error", "TEXT"))
+MIGRATIONS = (("mode", "TEXT"), ("talk_status", "TEXT"), ("talk_error", "TEXT"), ("conversation", "TEXT"))
 TALK_ACTIVE = ("queued", "transcribing", "thinking", "speaking")
 
 
@@ -55,6 +62,7 @@ class Note:
     mode: str | None = None
     talk_status: str | None = None
     talk_error: str | None = None
+    conversation: str | None = None
 
     @property
     def is_talk(self) -> bool:
@@ -114,6 +122,7 @@ class Store:
                     if name not in have:
                         db.execute(f"ALTER TABLE notes ADD COLUMN {name} {decl}")
             db.executescript(SCHEMA)
+            self._adopt_legacy_talk(db)
 
     def _db(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.data_dir / "index.sqlite")
@@ -121,7 +130,8 @@ class Store:
         return db
 
     def _query(self, sql: str, *args) -> list[Note]:
-        cols = "id, path, sha256, started_at, local_date, duration_ms, transcript_status, mode, talk_status, talk_error"
+        cols = ("id, path, sha256, started_at, local_date, duration_ms, transcript_status, mode, talk_status,"
+                " talk_error, conversation")
         with closing(self._db()) as db:
             return [Note(**dict(r)) for r in db.execute(sql.replace("*", cols, 1), args)]
 
@@ -144,14 +154,18 @@ class Store:
         write_atomic(self.data_dir / folder / f"{stem}.json", meta_raw)
         mode = meta.get("mode") if isinstance(meta.get("mode"), str) else None
         with closing(self._db()) as db, db:
+            conversation = None
+            if mode == "talk":
+                latest = None if meta.get("conversation") == "new" else self._latest_conversation(db)
+                conversation = latest or self._new_conversation(db)
             db.execute(
                 "INSERT INTO notes (id, path, sha256, started_at, started_utc, local_date, duration_ms, received_at,"
-                " mode, talk_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " mode, talk_status, conversation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     note_id, rel.as_posix(), meta["sha256"].lower(), meta["started_at"],
                     started.astimezone(timezone.utc).isoformat(), started.date().isoformat(),
                     meta.get("duration_ms"), datetime.now(timezone.utc).isoformat(),
-                    mode, "queued" if mode == "talk" else None,
+                    mode, "queued" if mode == "talk" else None, conversation,
                 ),
             )
         return self.get(note_id)
@@ -189,12 +203,47 @@ class Store:
         return self._query(f"SELECT * FROM notes WHERE mode = 'talk' AND talk_status IN ({marks}) ORDER BY started_utc",
                            *TALK_ACTIVE)
 
-    def talk_session(self, day: date) -> str | None:
+    # --- talk conversations (docs/talk.md -> Conversations & history) ------------------------------
+
+    @staticmethod
+    def _new_conversation(db) -> str:
+        cid = f"c-{uuid.uuid4().hex[:12]}"
+        db.execute("INSERT INTO talk_conversations (id, session_id, created_utc) VALUES (?, NULL, ?)",
+                   (cid, datetime.now(timezone.utc).isoformat()))
+        return cid
+
+    @staticmethod
+    def _latest_conversation(db) -> str | None:
+        row = db.execute("SELECT id FROM talk_conversations ORDER BY created_utc DESC, rowid DESC LIMIT 1").fetchone()
+        return row["id"] if row else None
+
+    def _adopt_legacy_talk(self, db) -> None:
+        """Talk notes from before conversations existed join one conversation that keeps the newest daily session."""
+        if not db.execute("SELECT 1 FROM notes WHERE mode = 'talk' AND conversation IS NULL LIMIT 1").fetchone():
+            return
+        cid = self._new_conversation(db)
+        row = db.execute("SELECT session_id FROM talk_sessions ORDER BY local_date DESC LIMIT 1").fetchone()
+        if row:
+            db.execute("UPDATE talk_conversations SET session_id = ? WHERE id = ?", (row["session_id"], cid))
+        db.execute("UPDATE notes SET conversation = ? WHERE mode = 'talk' AND conversation IS NULL", (cid,))
+
+    def latest_conversation(self) -> str | None:
         with closing(self._db()) as db:
-            row = db.execute("SELECT session_id FROM talk_sessions WHERE local_date = ?", (day.isoformat(),)).fetchone()
+            return self._latest_conversation(db)
+
+    def conversation_session(self, conversation: str | None) -> str | None:
+        if not conversation:
+            return None
+        with closing(self._db()) as db:
+            row = db.execute("SELECT session_id FROM talk_conversations WHERE id = ?", (conversation,)).fetchone()
         return row["session_id"] if row else None
 
-    def set_talk_session(self, day: date, session_id: str) -> None:
+    def set_conversation_session(self, conversation: str, session_id: str) -> None:
         with closing(self._db()) as db, db:
-            db.execute("INSERT OR REPLACE INTO talk_sessions (local_date, session_id) VALUES (?, ?)",
-                       (day.isoformat(), session_id))
+            db.execute("UPDATE talk_conversations SET session_id = ? WHERE id = ?", (session_id, conversation))
+
+    def conversation_turns(self, conversation: str, limit: int = 20) -> list[Note]:
+        """The conversation's talk notes, oldest -> newest, keeping the newest `limit`."""
+        rows = self._query("SELECT * FROM notes WHERE conversation = ? ORDER BY started_utc DESC LIMIT ?",
+                           conversation, limit)
+        return rows[::-1]

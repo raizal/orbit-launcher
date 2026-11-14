@@ -120,6 +120,26 @@ def create_app(
             raise HTTPException(404, "no reply audio (yet)")
         return FileResponse(wav, media_type="audio/wav")
 
+    @app.get("/v1/talk/history", dependencies=[Depends(require_token)])
+    def talk_history(limit: int = Query(20, ge=1, le=100)):
+        """The latest conversation, oldest -> newest (docs/talk.md -> Conversations & history)."""
+        conversation = store.latest_conversation()
+        turns = []
+        for note in store.conversation_turns(conversation, limit) if conversation else []:
+            txt, wav = reply_paths(store, note)
+            transcript = store.audio_path(note).with_suffix(".txt")
+            done = note.talk_status == "done" and txt.exists()
+            turns.append({
+                "id": note.id,
+                "started_at": note.started_at,
+                "transcript": transcript.read_text().strip() if transcript.exists() else None,
+                "status": note.talk_status or "queued",
+                "reply": txt.read_text().strip() if done else None,
+                "error": note.talk_error if note.talk_status == "error" else None,
+                "audio": f"/v1/notes/{note.id}/reply.wav" if done and wav.exists() else None,
+            })
+        return {"conversation": conversation, "turns": turns}
+
     return app
 
 

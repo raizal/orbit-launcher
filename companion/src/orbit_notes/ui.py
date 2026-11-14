@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import diary
+from . import actions, diary
 from .config import Config
 from .store import Note, Store
 from .talk import reply_paths
@@ -135,6 +136,20 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
         if not path.is_relative_to(root) or not path.is_file():
             _404()
         return FileResponse(path, media_type=AUDIO_TYPES[path.suffix.lower()])
+
+    @api.get("/talk")
+    def talk_state():
+        """Talk assistant: pending action (confirmed by voice only), audit log, current voice/personality settings."""
+        log = actions.ActionLog(cfg.data_dir)
+        p = log.pending()
+        pending = {**asdict(p), "expires_at": p.expires_at.isoformat(), "expired": p.expired()} if p else None
+        return {
+            "workspace": cfg.talk_workspace,
+            "pending": pending,
+            "audit": log.entries(limit=50),
+            "settings": asdict(actions.SettingsStore(cfg.data_dir, cfg.tts_voice).get()),
+            "voices": actions.VOICES,
+        }
 
     @api.get("/pairing.png")
     def pairing_png():

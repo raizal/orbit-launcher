@@ -117,6 +117,7 @@
       <article>
         <div class="row">
           <span class="time num">{n.time}</span>
+          {#if n.mode === 'talk'}<span class="badge talk">Talk</span>{/if}
           <span class="muted num">{fmtDuration(n.duration_ms)}</span>
           <span class="badge {n.transcript_status}">{n.transcript_status}</span>
           <span class="stem muted">{n.stem}</span>
@@ -128,6 +129,20 @@
           {:else if n.transcript === ''}(no speech)
           {:else}Not transcribed yet{/if}
         </p>
+        {#if n.mode === 'talk'}
+          <div class="reply">
+            <div class="reply-head">
+              <span class="label">Feedback</span>
+              {#if n.talk_status !== 'done'}<span class="badge {n.talk_status}">{n.talk_status}</span>{/if}
+            </div>
+            {#if n.reply}<p>{n.reply}</p>
+            {:else if n.talk_status === 'error'}<p class="empty">{n.talk_error}</p>
+            {:else}<p class="empty">Working on it…</p>{/if}
+            {#if n.reply_audio}
+              <audio controls preload="none" src={api.replyUrl(n.id)}></audio>
+            {/if}
+          </div>
+        {/if}
       </article>
     {/each}
   </section>
@@ -206,6 +221,13 @@
   .badge.done { color: var(--ok); }
   .badge.pending { color: var(--info); }
   .badge.error { color: var(--rec); }
+  .badge.talk { color: var(--accent); border: 1px solid var(--accent); background: transparent; }
+  .badge.queued, .badge.transcribing, .badge.thinking, .badge.speaking { color: var(--info); }
+  .reply { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 8px; }
+  .reply-head { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+  .reply .label { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; }
+  .reply p { margin: 4px 0 8px; line-height: 1.5; }
+  .reply .empty { color: var(--muted); font-style: italic; }
   .small { font-size: 12px; padding: 4px 10px; }
   audio { width: 100%; height: 36px; }
   .transcript { margin: 10px 0 0; line-height: 1.5; white-space: pre-wrap; }

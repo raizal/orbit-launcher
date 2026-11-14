@@ -24,6 +24,7 @@ class Entry:
     note: Note
     audio: Path
     transcript: str | None  # None = not transcribed yet, "" = transcribed, no speech
+    feedback: str | None = None  # talk notes: the spoken reply (<stem>.reply.txt)
 
 
 @dataclass
@@ -38,7 +39,9 @@ def collect(store: Store, day: date) -> list[Entry]:
     for note in store.notes_on(day):
         audio = store.audio_path(note)
         txt = audio.with_suffix(".txt")
-        entries.append(Entry(note, audio, txt.read_text().strip() if txt.exists() else None))
+        reply = audio.with_name(f"{note.stem}.reply.txt")
+        entries.append(Entry(note, audio, txt.read_text().strip() if txt.exists() else None,
+                             reply.read_text().strip() if note.is_talk and reply.exists() else None))
     return entries
 
 
@@ -220,6 +223,8 @@ def render_block(day: date, entries: list[Entry], gen: Generated, cfg: Config) -
         lines.append(f"> [!quote]- {e.note.started:%H:%M} · {e.note.stem}")
         body = e.transcript or transcript_label(e.transcript)
         lines += [f"> {line}" if line else ">" for line in body.splitlines()]
+        if e.feedback:
+            lines += [">", f"> **Feedback:** {' '.join(e.feedback.split())}"]
         lines.append("")
     lines.append(END)
     return "\n".join(lines)
@@ -250,7 +255,7 @@ def build(cfg: Config, store: Store, day: date) -> Path:
         raise ValueError(f"unknown llm_provider {cfg.llm_provider!r}; use one of {', '.join(PROVIDERS)}")
     entries = collect(store, day)
     if cfg.vault_dir:
-        entries = [Entry(e.note, vault_copy(e.audio, cfg), e.transcript) for e in entries]
+        entries = [Entry(e.note, vault_copy(e.audio, cfg), e.transcript, e.feedback) for e in entries]
     page = cfg.diary_dir / f"{day.isoformat()}.md"
     gen = PROVIDERS[cfg.llm_provider](cfg, day, entries) if entries else Generated("_No notes recorded this day._", [])
     block = render_block(day, entries, gen, cfg)

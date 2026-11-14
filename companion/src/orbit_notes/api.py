@@ -11,10 +11,11 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .config import Config
-from .store import Store, parse_started_at
+from .store import TALK_ACTIVE, Store, parse_started_at
+from .talk import reply_paths
 
 HEALTH_LIMIT = 30  # requests per IP per window
 HEALTH_WINDOW_S = 60.0
@@ -91,6 +92,33 @@ def create_app(
             store.add(note_id, data, meta.encode(), meta_obj, audio.filename)
         on_stored(note_id)
         return JSONResponse(body, status_code=201)
+
+    def talk_note(note_id: str):
+        note = store.get(note_id)
+        if not note or not note.is_talk:
+            raise HTTPException(404, "no such talk note")
+        return note
+
+    @app.get("/v1/notes/{note_id}/reply", dependencies=[Depends(require_token)])
+    def get_reply(note_id: str):
+        """Talk feedback progress (docs/talk.md): 202 while working, 200 when done or failed."""
+        note = talk_note(note_id)
+        txt, wav = reply_paths(store, note)
+        if note.talk_status == "done" and txt.exists() and wav.exists():
+            transcript = store.audio_path(note).with_suffix(".txt")
+            return {"status": "done", "text": txt.read_text().strip(), "audio": f"/v1/notes/{note_id}/reply.wav",
+                    "transcript": transcript.read_text().strip() if transcript.exists() else ""}
+        if note.talk_status == "error":
+            return {"status": "error", "error": note.talk_error or "unknown error"}
+        status = note.talk_status if note.talk_status in TALK_ACTIVE else "queued"
+        return JSONResponse({"status": status}, status_code=202)
+
+    @app.get("/v1/notes/{note_id}/reply.wav", dependencies=[Depends(require_token)])
+    def get_reply_wav(note_id: str):
+        _, wav = reply_paths(store, talk_note(note_id))
+        if not wav.exists():
+            raise HTTPException(404, "no reply audio (yet)")
+        return FileResponse(wav, media_type="audio/wav")
 
     return app
 

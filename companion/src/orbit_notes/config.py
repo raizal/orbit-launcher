@@ -27,6 +27,10 @@ diary_language = "auto"                  # "auto" = same language as the notes, 
 llm_provider = "none"                    # "none", "codex" (your `codex` CLI login) or "anthropic" (ANTHROPIC_API_KEY)
 llm_model = "claude-sonnet-5-5"          # for "anthropic"
 codex_model = ""                         # for "codex"; empty = Codex default
+# Talk (spoken feedback for notes recorded in Talk mode on the watch, see docs/talk.md)
+talk_provider = "codex"                  # "codex" (your `codex` CLI login) or "none"
+tts_voice = "en_US-lessac-medium"        # Piper voice, downloaded once into <data_dir>/voices/
+talk_timeout_s = 120
 """
 
 
@@ -48,6 +52,9 @@ class Config:
     codex_model: str = ""
     codex_timeout_s: int = 300
     llm_model: str = "claude-sonnet-5-5"
+    talk_provider: str = "codex"
+    tts_voice: str = "en_US-lessac-medium"
+    talk_timeout_s: int = 120
 
     @property
     def diary_dir(self) -> Path:
@@ -92,7 +99,7 @@ def load(explicit: Path | None = None, *, create: bool = True) -> Config:
         value = os.environ.get(f"ORBIT_{f.name.upper()}", raw.get(f.name))
         if value is None or value == "":
             continue
-        if f.name in ("port", "codex_timeout_s"):
+        if f.name in ("port", "codex_timeout_s", "talk_timeout_s"):
             value = int(value)
         elif f.name in ("data_dir", "vault_dir"):
             p = Path(str(value)).expanduser()

@@ -33,11 +33,13 @@ def serve(config: ConfigOpt = None, mdns: bool = typer.Option(True, help="Advert
     import uvicorn
 
     from .api import create_app, serve_lifespan
+    from .talk import Talker
     from .transcribe import Transcriber, Worker
     from .ui import mount_ui
 
     cfg, store = _load(config)
-    w = Worker(store, Transcriber(cfg)) if worker else None
+    talker = Talker(cfg, store) if cfg.talk_provider != "none" else None
+    w = Worker(store, Transcriber(cfg), talker) if worker else None
     app_ = create_app(cfg, store, on_stored=w.enqueue if w else (lambda _id: None),
                       lifespan=serve_lifespan(cfg, w, advertise=mdns))
     mount_ui(app_, cfg, store, w.enqueue if w else None)

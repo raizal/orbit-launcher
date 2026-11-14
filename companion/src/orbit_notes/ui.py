@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from . import diary
 from .config import Config
 from .store import Note, Store
+from .talk import reply_paths
 
 WEB_DIR = Path(__file__).parent / "web"  # built by `npm run build` in companion/web
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav"}
@@ -33,6 +34,13 @@ def require_local(request: Request) -> None:
 def note_json(store: Store, n: Note) -> dict:
     audio = store.audio_path(n)
     txt = audio.with_suffix(".txt")
+    reply_txt, reply_wav = reply_paths(store, n)
+    talk = {
+        "talk_status": n.talk_status,
+        "talk_error": n.talk_error,
+        "reply": reply_txt.read_text().strip() if reply_txt.exists() else None,
+        "reply_audio": reply_wav.exists(),
+    } if n.is_talk else {}
     return {
         "id": n.id,
         "stem": n.stem,
@@ -42,6 +50,8 @@ def note_json(store: Store, n: Note) -> dict:
         "transcript_status": n.transcript_status,
         "transcript": txt.read_text().strip() if txt.exists() else None,
         "size": audio.stat().st_size if audio.exists() else None,
+        "mode": n.mode,
+        **talk,
     }
 
 
@@ -84,6 +94,14 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
         if not path.exists():
             _404()
         return FileResponse(path, media_type="audio/aac", filename=path.name)
+
+    @api.get("/notes/{note_id}/reply.wav")
+    def reply_audio(note_id: str):
+        n = store.get(note_id) or _404()
+        _, wav = reply_paths(store, n)
+        if not n.is_talk or not wav.exists():
+            _404()
+        return FileResponse(wav, media_type="audio/wav")
 
     @api.post("/notes/{note_id}/transcribe")
     def retranscribe(note_id: str):

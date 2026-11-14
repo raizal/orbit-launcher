@@ -26,10 +26,21 @@ CREATE TABLE IF NOT EXISTS notes (
     status            TEXT NOT NULL DEFAULT 'stored',
     transcript_status TEXT NOT NULL DEFAULT 'pending',  -- pending / done / failed
     transcript_error  TEXT,
-    received_at       TEXT NOT NULL
+    received_at       TEXT NOT NULL,
+    mode              TEXT,               -- sidecar `mode`: NULL = normal note, 'talk' = wants spoken feedback
+    talk_status       TEXT,               -- talk notes: queued / transcribing / thinking / speaking / done / error
+    talk_error        TEXT
 );
 CREATE INDEX IF NOT EXISTS notes_local_date ON notes(local_date);
+CREATE TABLE IF NOT EXISTS talk_sessions (
+    local_date TEXT PRIMARY KEY,          -- one Codex session per local date
+    session_id TEXT NOT NULL
+);
 """
+
+# Columns added after the first release; ALTERed into existing index.sqlite files on open.
+MIGRATIONS = (("mode", "TEXT"), ("talk_status", "TEXT"), ("talk_error", "TEXT"))
+TALK_ACTIVE = ("queued", "transcribing", "thinking", "speaking")
 
 
 @dataclass
@@ -41,6 +52,13 @@ class Note:
     local_date: str
     duration_ms: int | None
     transcript_status: str
+    mode: str | None = None
+    talk_status: str | None = None
+    talk_error: str | None = None
+
+    @property
+    def is_talk(self) -> bool:
+        return self.mode == "talk"
 
     @property
     def started(self) -> datetime:
@@ -88,7 +106,13 @@ class Store:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()  # serialises check-then-store in PUT
-        with self._db() as db:
+        with closing(self._db()) as db, db:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes'").fetchone()
+            if exists:
+                have = {r["name"] for r in db.execute("PRAGMA table_info(notes)")}
+                for name, decl in MIGRATIONS:
+                    if name not in have:
+                        db.execute(f"ALTER TABLE notes ADD COLUMN {name} {decl}")
             db.executescript(SCHEMA)
 
     def _db(self) -> sqlite3.Connection:
@@ -97,7 +121,7 @@ class Store:
         return db
 
     def _query(self, sql: str, *args) -> list[Note]:
-        cols = "id, path, sha256, started_at, local_date, duration_ms, transcript_status"
+        cols = "id, path, sha256, started_at, local_date, duration_ms, transcript_status, mode, talk_status, talk_error"
         with closing(self._db()) as db:
             return [Note(**dict(r)) for r in db.execute(sql.replace("*", cols, 1), args)]
 
@@ -118,14 +142,16 @@ class Store:
         rel = folder / f"{stem}.aac"
         write_atomic(self.data_dir / rel, audio)
         write_atomic(self.data_dir / folder / f"{stem}.json", meta_raw)
+        mode = meta.get("mode") if isinstance(meta.get("mode"), str) else None
         with closing(self._db()) as db, db:
             db.execute(
-                "INSERT INTO notes (id, path, sha256, started_at, started_utc, local_date, duration_ms, received_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO notes (id, path, sha256, started_at, started_utc, local_date, duration_ms, received_at,"
+                " mode, talk_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     note_id, rel.as_posix(), meta["sha256"].lower(), meta["started_at"],
                     started.astimezone(timezone.utc).isoformat(), started.date().isoformat(),
                     meta.get("duration_ms"), datetime.now(timezone.utc).isoformat(),
+                    mode, "queued" if mode == "talk" else None,
                 ),
             )
         return self.get(note_id)
@@ -151,3 +177,24 @@ class Store:
                 "UPDATE notes SET transcript_status = ?, transcript_error = ? WHERE id = ?",
                 (status, error, note_id),
             )
+
+    # --- talk ------------------------------------------------------------------------------------
+
+    def set_talk_status(self, note_id: str, status: str, error: str | None = None) -> None:
+        with closing(self._db()) as db, db:
+            db.execute("UPDATE notes SET talk_status = ?, talk_error = ? WHERE id = ?", (status, error, note_id))
+
+    def pending_talk(self) -> list[Note]:
+        marks = ", ".join("?" * len(TALK_ACTIVE))
+        return self._query(f"SELECT * FROM notes WHERE mode = 'talk' AND talk_status IN ({marks}) ORDER BY started_utc",
+                           *TALK_ACTIVE)
+
+    def talk_session(self, day: date) -> str | None:
+        with closing(self._db()) as db:
+            row = db.execute("SELECT session_id FROM talk_sessions WHERE local_date = ?", (day.isoformat(),)).fetchone()
+        return row["session_id"] if row else None
+
+    def set_talk_session(self, day: date, session_id: str) -> None:
+        with closing(self._db()) as db, db:
+            db.execute("INSERT OR REPLACE INTO talk_sessions (local_date, session_id) VALUES (?, ?)",
+                       (day.isoformat(), session_id))

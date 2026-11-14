@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import queue
 import threading
+import time
 import traceback
 
 from .config import Config
-from .store import Note, Store, write_atomic
+from .store import TALK_ACTIVE, Note, Store, write_atomic
+from .talk import is_stale
 
 
 class Transcriber:
@@ -51,27 +54,56 @@ class Transcriber:
 
 
 class Worker:
-    """Background thread inside `serve`: transcribes pending notes, then new ones as they arrive."""
+    """
+    Background thread inside `serve`: transcribes pending notes, then new ones as they arrive.
+    Talk notes jump the queue, and after their transcript the talk pipeline runs (talk.Talker).
+    """
 
-    def __init__(self, store: Store, transcriber: Transcriber):
-        self.store, self.transcriber = store, transcriber
-        self.queue: queue.Queue[str | None] = queue.Queue()
+    TALK, NORMAL, STOP = 0, 1, 2  # queue priorities, lower first; stop() comes after queued work (as before)
+
+    def __init__(self, store: Store, transcriber: Transcriber, talker=None):
+        self.store, self.transcriber, self.talker = store, transcriber, talker
+        self.queue: queue.PriorityQueue[tuple[int, int, str | None]] = queue.PriorityQueue()
+        self._seq = itertools.count()  # FIFO within a priority
         self.thread = threading.Thread(target=self._loop, name="transcriber", daemon=True)
 
     def start(self) -> None:
+        for note in self.store.pending_talk():  # interrupted talk turns (e.g. a restart mid-way)
+            self.enqueue(note.id)
         for note in self.store.pending_transcripts():
-            self.queue.put(note.id)
+            if not note.is_talk:
+                self.enqueue(note.id)
         self.thread.start()
 
     def enqueue(self, note_id: str) -> None:
-        self.queue.put(note_id)
+        note = self.store.get(note_id)
+        talk = bool(note and note.is_talk and note.talk_status in TALK_ACTIVE)
+        if talk and (self.talker is None or is_stale(note)):
+            # Feedback only while it is still the same day; the note itself is transcribed as usual.
+            reason = "talk feedback is off on this server" if self.talker is None else "recorded on an earlier day"
+            self.store.set_talk_status(note_id, "error", f"no feedback: {reason}")
+            talk = False
+        self.queue.put((self.TALK if talk else self.NORMAL, next(self._seq), note_id))
 
     def stop(self) -> None:
-        self.queue.put(None)
+        self.queue.put((self.STOP, next(self._seq), None))
 
     def _loop(self) -> None:
-        while (note_id := self.queue.get()) is not None:
+        while (note_id := self.queue.get()[2]) is not None:
             note = self.store.get(note_id)
-            if note and note.transcript_status != "done":
+            if not note:
+                continue
+            talk = note.is_talk and self.talker is not None and note.talk_status in TALK_ACTIVE
+            if note.transcript_status != "done":
+                if talk:
+                    self.store.set_talk_status(note.id, "transcribing")
                 print(f"whisper: transcribing {note.path}")
-                self.transcriber.run(self.store, note)
+                t = time.monotonic()
+                ok = self.transcriber.run(self.store, note)
+                print(f"whisper: {note.stem} {time.monotonic() - t:.1f}s")
+                if not ok:
+                    if talk:
+                        self.store.set_talk_status(note.id, "error", "transcription failed (the note itself is safe)")
+                    continue
+            if talk:
+                self.talker.run(self.store.get(note_id))

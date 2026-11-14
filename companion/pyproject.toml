@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.162.7",
     "faster-whisper>=1.2.1",
     "ifaddr>=0.2.0",
+    "piper-tts>=1.8.0",
     "python-multipart>=0.0.33",
     "qrcode[pil]>=8.2",
     "typer>=0.29.1",

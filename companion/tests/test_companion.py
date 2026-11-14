@@ -393,3 +393,249 @@ def test_diary_codex_missing_cli(client, store, cfg, monkeypatch):
     add_note(client, store, "2026-11-13T07:02:10+07:00", "hello")
     with pytest.raises(RuntimeError, match="codex CLI not found"):
         diary.build(cfg, store, date(2026, 11, 13))
+
+
+# --- talk (docs/talk.md) ----------------------------------------------------------------------------
+
+import sqlite3
+from datetime import datetime
+
+from orbit_notes.store import SCHEMA
+from orbit_notes.talk import Talker
+from orbit_notes.transcribe import Worker
+
+FAKE_TALK_CODEX = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+prompt = sys.stdin.read()
+log = os.environ["FAKE_CODEX_LOG"]
+calls = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
+open(log, "a").write(json.dumps({"args": args, "prompt": prompt, "cwd": os.getcwd()}) + "\\n")
+if os.environ.get("FAKE_CODEX_FAIL"):
+    print("boom", file=sys.stderr); sys.exit(3)
+resume = args[1] == "resume"
+sid = args[-2] if resume else "sess-%d" % sum(1 for c in calls if c["args"][1] != "resume")
+print(json.dumps({"type": "thread.started", "thread_id": sid}))
+print(json.dumps({"type": "turn.started"}))
+reply = "- That sounds **like** a full day. Reply %d." % (len(calls) + 1)
+print(json.dumps({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": reply}}))
+open(args[args.index("-o") + 1], "w").write(reply)
+"""
+
+
+@pytest.fixture
+def fake_codex(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "codex").write_text(FAKE_TALK_CODEX)
+    (bin_dir / "codex").chmod(0o755)
+    log = tmp_path / "codex-calls.jsonl"
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    return lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def fake_tts(spoken):
+    def tts(text, out):
+        spoken.append(text)
+        out.write_bytes(b"RIFF fake wav")
+    return tts
+
+
+def add_talk(client, store, started_at, text=None):
+    meta, data = make_note(started_at=started_at, audio=b"talk " + started_at.encode(), mode="talk")
+    assert put(client, meta, data, filename="x").status_code == 201
+    note = store.get(meta["id"])
+    if text is not None:
+        store.audio_path(note).with_suffix(".txt").write_text(text + "\n")
+        store.set_transcript_status(note.id, "done")
+    return store.get(meta["id"])
+
+
+def test_migration_adds_talk_columns_to_existing_db(tmp_path):
+    old = SCHEMA.split("    mode ")[0].rstrip().rstrip(",") + "\n);\n"  # the v1 table, before talk
+    db = sqlite3.connect(tmp_path / "index.sqlite")
+    db.executescript(old)
+    db.execute("INSERT INTO notes (id, path, sha256, started_at, started_utc, local_date, received_at)"
+               " VALUES ('a', 'notes/x.aac', 'ff', '2026-11-13T07:00:00+07:00', '2026-11-13T00:00:00+00:00',"
+               " '2026-11-13', 'now')")
+    db.commit()
+    db.close()
+    store = Store(tmp_path)
+    note = store.get("a")
+    assert note.mode is None and note.talk_status is None and note.transcript_status == "pending"
+    Store(tmp_path)  # opening twice is a no-op
+    store.set_talk_session(date(2026, 11, 13), "s1")
+    assert store.talk_session(date(2026, 11, 13)) == "s1"
+
+
+def test_talk_mode_stored_in_index(client, store):
+    talk = add_talk(client, store, "2026-11-13T07:02:10+07:00")
+    plain = add_note(client, store, "2026-11-13T08:00:00+07:00")
+    assert (talk.mode, talk.talk_status) == ("talk", "queued")
+    assert (plain.mode, plain.talk_status) == (None, None)
+
+
+def test_reply_endpoint_states(client, store):
+    assert client.get(f"/v1/notes/{uuid.uuid4()}/reply", headers=AUTH).status_code == 404
+    plain = add_note(client, store, "2026-11-13T06:00:00+07:00", "plain")
+    assert client.get(f"/v1/notes/{plain.id}/reply", headers=AUTH).status_code == 404  # not a talk note
+
+    note = add_talk(client, store, "2026-11-13T07:02:10+07:00", "I walked by the river")
+    url = f"/v1/notes/{note.id}/reply"
+    assert client.get(url).status_code == 401
+    assert client.get(url + ".wav").status_code == 401
+    r = client.get(url, headers=AUTH)
+    assert (r.status_code, r.json()) == (202, {"status": "queued"})
+    for status in ("transcribing", "thinking", "speaking"):
+        store.set_talk_status(note.id, status)
+        r = client.get(url, headers=AUTH)
+        assert (r.status_code, r.json()) == (202, {"status": status})
+    assert client.get(url + ".wav", headers=AUTH).status_code == 404  # no audio yet
+
+    store.set_talk_status(note.id, "error", "codex exec failed (1)")
+    r = client.get(url, headers=AUTH)
+    assert (r.status_code, r.json()) == (200, {"status": "error", "error": "codex exec failed (1)"})
+
+    audio = store.audio_path(note)
+    audio.with_name(f"{note.stem}.reply.txt").write_text("What a calm walk.\n")
+    audio.with_name(f"{note.stem}.reply.wav").write_bytes(b"RIFFwav")
+    store.set_talk_status(note.id, "done")
+    r = client.get(url, headers=AUTH)
+    assert r.status_code == 200
+    assert r.json() == {"status": "done", "text": "What a calm walk.", "audio": f"/v1/notes/{note.id}/reply.wav",
+                        "transcript": "I walked by the river"}
+    w = client.get(url + ".wav", headers=AUTH)
+    assert w.status_code == 200 and w.content == b"RIFFwav" and w.headers["content-type"] == "audio/wav"
+
+
+def test_talk_one_codex_session_per_day(client, store, cfg, fake_codex):
+    spoken = []
+    talker = Talker(cfg, store, tts=fake_tts(spoken))
+    (cfg.diary_dir).mkdir(parents=True)
+    (cfg.diary_dir / "2026-11-12.md").write_text(
+        "---\ndate: 2026-11-12\n---\n<!-- orbit:begin -->\n# Thursday\n\nI planted tomatoes.\n\n"
+        "## Transcripts\n\n> raw stuff\n<!-- orbit:end -->\n")
+    add_note(client, store, "2026-11-13T06:30:00+07:00", "Woke up early, coffee.")
+    first = add_talk(client, store, "2026-11-13T07:02:10+07:00", "Feeling a bit tired today")
+    second = add_talk(client, store, "2026-11-13T21:00:00+07:00", "The day went better than expected")
+    next_day = add_talk(client, store, "2026-11-14T08:00:00+07:00", "New day")
+
+    assert talker.run(first) and talker.run(second) and talker.run(next_day)
+    calls = fake_codex()
+    assert len(calls) == 3
+
+    a = calls[0]["args"]
+    assert a[:2] == ["exec", "--json"] and "resume" not in a
+    for flag in ("--skip-git-repo-check", "--ignore-user-config", "--ignore-rules"):
+        assert flag in a
+    assert a[a.index("-s") + 1] == "read-only" and "model_reasoning_effort=low" in a
+    assert a[a.index("-C") + 1] == str(cfg.data_dir / "talk") and calls[0]["cwd"] == str(cfg.data_dir / "talk")
+    p = calls[0]["prompt"]
+    assert "journaling companion" in p and "I planted tomatoes." in p and "raw stuff" not in p
+    assert "[06:30] Woke up early, coffee." in p and "Feeling a bit tired today" in p
+
+    b = calls[1]["args"]
+    assert b[:3] == ["exec", "resume", "--json"] and b[-2:] == ["sess-0", "-"]
+    assert 'sandbox_mode="read-only"' in b and "--ignore-user-config" in b
+    assert "The day went better than expected" in calls[1]["prompt"] and "journaling companion" not in calls[1]["prompt"]
+
+    c = calls[2]["args"]
+    assert "resume" not in c  # a new local date starts a new session
+    assert "There is no diary page for yesterday." in calls[2]["prompt"]  # no page for the 13th
+    assert "Feeling a bit tired" not in calls[2]["prompt"]  # yesterday's notes are not "earlier today"
+    assert store.talk_session(date(2026, 11, 13)) == "sess-0"
+    assert store.talk_session(date(2026, 11, 14)) == "sess-1"
+
+    # Reply files, spoken text without markdown, status done.
+    txt = store.audio_path(first).with_name(f"{first.stem}.reply.txt")
+    assert txt.read_text() == "That sounds like a full day. Reply 1.\n"
+    assert store.audio_path(first).with_name(f"{first.stem}.reply.wav").exists()
+    assert spoken[0] == "That sounds like a full day. Reply 1."
+    assert store.get(first.id).talk_status == "done"
+
+
+def test_talk_codex_failure_keeps_note(client, store, cfg, fake_codex, monkeypatch):
+    monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
+    note = add_talk(client, store, "2026-11-13T07:02:10+07:00", "hello")
+    assert not Talker(cfg, store, tts=fake_tts([])).run(note)
+    n = store.get(note.id)
+    assert n.talk_status == "error" and "codex exec failed (3)" in n.talk_error and "boom" in n.talk_error
+    assert store.audio_path(n).exists()
+    r = client.get(f"/v1/notes/{note.id}/reply", headers=AUTH)
+    assert r.status_code == 200 and r.json()["status"] == "error"
+
+
+def test_talk_no_speech_is_an_error_without_codex(client, store, cfg, fake_codex):
+    note = add_talk(client, store, "2026-11-13T07:02:10+07:00", "")
+    assert not Talker(cfg, store, tts=fake_tts([])).run(note)
+    assert store.get(note.id).talk_error == "no speech heard in the recording"
+    assert fake_codex() == []
+
+
+class FakeTranscriber:
+    def __init__(self, store):
+        self.store, self.order = store, []
+
+    def run(self, store, note):
+        self.order.append(note.id)
+        store.audio_path(note).with_suffix(".txt").write_text(f"words of {note.id}\n")
+        store.set_transcript_status(note.id, "done")
+        return True
+
+
+def now_iso():
+    return datetime.now().astimezone().replace(microsecond=0).isoformat()
+
+
+def test_worker_talk_jumps_queue_and_gets_feedback(client, store, cfg, fake_codex):
+    plain = [add_note(client, store, f"2026-11-1{i}T08:00:00+07:00") for i in range(3)]
+    talk = add_talk(client, store, now_iso())
+    stale = add_talk(client, store, "2026-11-01T08:00:00+07:00")  # uploaded on a later day: no feedback
+    tr = FakeTranscriber(store)
+    w = Worker(store, tr, Talker(cfg, store, tts=fake_tts([])))
+    w.start()  # queues everything pending; talk first
+    w.stop()
+    w.thread.join(timeout=30)
+    assert tr.order[0] == talk.id
+    assert set(tr.order) == {talk.id, stale.id, *(n.id for n in plain)}  # all still transcribed
+    assert store.get(talk.id).talk_status == "done"
+    s = store.get(stale.id)
+    assert s.talk_status == "error" and "earlier day" in s.talk_error
+    assert len(fake_codex()) == 1
+
+
+def test_worker_marks_talk_error_when_transcription_fails(client, store, cfg, fake_codex):
+    talk = add_talk(client, store, now_iso())
+
+    class Failing:
+        def run(self, store, note):
+            store.set_transcript_status(note.id, "failed", "bad audio")
+            return False
+
+    w = Worker(store, Failing(), Talker(cfg, store, tts=fake_tts([])))
+    w.start()
+    w.stop()
+    w.thread.join(timeout=30)
+    assert store.get(talk.id).talk_status == "error" and fake_codex() == []
+
+
+def test_diary_shows_feedback_in_talk_callout(client, store, cfg):
+    note = add_talk(client, store, "2026-11-13T07:02:10+07:00", "Feeling tired")
+    store.audio_path(note).with_name(f"{note.stem}.reply.txt").write_text("Rest sounds good.\nTake it slow.\n")
+    plain = add_note(client, store, "2026-11-13T08:00:00+07:00", "plain note")
+    store.audio_path(plain).with_name(f"{plain.stem}.reply.txt").write_text("ignored: not a talk note\n")
+    text = diary.build(cfg, store, date(2026, 11, 13)).read_text()
+    assert "> Feeling tired\n>\n> **Feedback:** Rest sounds good. Take it slow.\n" in text
+    assert "ignored" not in text
+
+
+def test_ui_shows_talk_reply(client, store, cfg):
+    note = add_talk(client, store, "2026-11-13T07:02:10+07:00", "hi")
+    store.audio_path(note).with_name(f"{note.stem}.reply.txt").write_text("Hello.\n")
+    store.audio_path(note).with_name(f"{note.stem}.reply.wav").write_bytes(b"RIFF")
+    store.set_talk_status(note.id, "done")
+    ui = ui_client(cfg, store)
+    n = ui.get("/ui/api/notes", params={"day": "2026-11-13"}).json()[0]
+    assert (n["mode"], n["talk_status"], n["reply"], n["reply_audio"]) == ("talk", "done", "Hello.", True)
+    assert ui.get(f"/ui/api/notes/{note.id}/reply.wav").content == b"RIFF"

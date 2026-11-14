@@ -17,6 +17,7 @@ export const api = {
   diary: (day) => call(`/diary/${day}`),
   buildDiary: (day) => call(`/diary/${day}`, { method: 'POST' }),
   audioUrl: (id) => `/ui/api/notes/${id}/audio`,
+  replyUrl: (id) => `/ui/api/notes/${id}/reply.wav`,
   pairingUrl: () => `/ui/api/pairing.png?t=${Date.now()}`,
 }
 

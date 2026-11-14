@@ -1,7 +1,7 @@
 # Talk — journaling with spoken feedback
 
 You talk to the watch like a diary; the companion answers with short spoken feedback
-(reflection, maybe one gentle question). Not a fast chat: ~10 s from "stop" to hearing the
+(reflection, maybe one gentle question). Not a fast chat: ~30 s from "stop" to hearing the
 reply is fine. Every talk turn is also a normal voice note, so it lands in the diary.
 
 ## Flow
@@ -39,7 +39,7 @@ GET /v1/notes/{id}/reply.wav            audio/wav (Piper output, mono)
 - **Feedback** — `codex exec` in lean mode: `--skip-git-repo-check --ignore-user-config
   --ignore-rules -s read-only -c model_reasoning_effort=low`, working dir `data/talk/`.
   **One Codex session per local date**: first talk turn of the day starts a session (capture its
-  id from `--json` output), later turns use `codex exec resume <id>`. Session ids stored in the
+  id from `--json` output), later turns use `codex exec resume <id>` (resume takes no `-s`/`-C`: it gets `-c sandbox_mode="read-only"` and runs in `data/talk/`). Session ids stored in the
   index (`talk_sessions(local_date, session_id)`). First turn's prompt includes the companion
   persona, yesterday's diary text (if a page exists), and today's earlier transcripts.
 - Persona: warm, thoughtful journaling companion. Reply in **English**, 2–4 short sentences,

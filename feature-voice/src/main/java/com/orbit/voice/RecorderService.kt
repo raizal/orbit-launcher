@@ -62,6 +62,7 @@ class RecorderService : Service() {
                 intent.getStringExtra(EXTRA_CONVERSATION),
             )
             ACTION_STOP -> stop()
+            ACTION_CANCEL -> cancel(intent.getStringExtra(EXTRA_FILE))
             else -> if (recorder == null) stopSelf()
         }
         return START_NOT_STICKY
@@ -108,6 +109,8 @@ class RecorderService : Service() {
 
     private fun stop() {
         val r = recorder ?: run { stopSelf(); return }
+        // Cancel tapped on screen but a Stop (e.g. from the notification) got here first: cancel wins.
+        if (Discards.isCancelled(temp!!)) return cancel(null)
         handler.removeCallbacks(ticker)
         val durationMs = SystemClock.elapsedRealtime() - startElapsed
         val stopped = runCatching { r.stop() }
@@ -133,6 +136,34 @@ class RecorderService : Service() {
             // Too short or encoder error: leave the temp file; recoverOrphans() decides later.
             broadcast(RecorderState.error("Too short"))
         }
+        stopForeground(true)
+        stopSelf()
+    }
+
+    /**
+     * Stops and deletes the current recording; nothing is finalized, queued or sent.
+     * [expected] = the note name the UI showed (`<stamp>.aac`); a different
+     * recording is left alone. With nothing recording this does nothing — a note
+     * that was already saved is never deleted here.
+     */
+    private fun cancel(expected: String?) {
+        val r = recorder ?: run { stopSelf(); return }
+        val file = temp!!
+        val name = file.name.removeSuffix(NoteStore.TEMP_SUFFIX)
+        if (expected != null && expected != name) {
+            Log.w(TAG, "cancel for $expected ignored; recording $name")
+            return
+        }
+        // Durable first (the UI normally wrote it already): if we die below, recovery discards it.
+        runCatching { Discards.mark(store.dir, name) }.onFailure { Log.e(TAG, "cancel marker failed", it) }
+        handler.removeCallbacks(ticker)
+        runCatching { r.stop() } // may throw if very short; the file goes either way
+        r.release()
+        recorder = null
+        wakeLock?.takeIf { it.isHeld }?.release()
+        RecorderState.clearMarker(this)
+        if (Discards.discard(file)) Log.i(TAG, "cancelled $name") else Log.e(TAG, "cancelled $name; delete failed, marker kept")
+        broadcast(RecorderState.cancelled(name))
         stopForeground(true)
         stopSelf()
     }
@@ -173,6 +204,9 @@ class RecorderService : Service() {
     companion object {
         const val ACTION_START = "com.orbit.voice.START"
         const val ACTION_STOP = "com.orbit.voice.STOP"
+        const val ACTION_CANCEL = "com.orbit.voice.CANCEL"
+        /** For [ACTION_CANCEL]: the note name (`<stamp>.aac`) the UI is cancelling. */
+        const val EXTRA_FILE = "file"
         const val EXTRA_PRESSED_AT = "pressed_at"
         /** Optional note mode for the sidecar (`"talk"`); absent = normal note. */
         const val EXTRA_MODE = "mode"

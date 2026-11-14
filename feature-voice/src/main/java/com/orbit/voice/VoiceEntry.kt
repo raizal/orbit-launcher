@@ -31,4 +31,21 @@ object VoiceEntry {
     fun stopRecording(context: Context) {
         context.startService(Intent(context, RecorderService::class.java).setAction(RecorderService.ACTION_STOP))
     }
+
+    /**
+     * Discards the recording [fileName] (`<stamp>.aac`, as shown on screen): marks it
+     * cancelled on disk first (so no recovery path can ever turn it into a note),
+     * then tells the service to stop and delete it. Nothing is queued or sent.
+     */
+    fun cancelRecording(context: Context, fileName: String) {
+        runCatching { Discards.mark(NoteStore(context).dir, fileName) }
+        context.startService(
+            Intent(context, RecorderService::class.java)
+                .setAction(RecorderService.ACTION_CANCEL)
+                .putExtra(RecorderService.EXTRA_FILE, fileName)
+        )
+        // Two short buzzes: different from the single start/stop buzz.
+        context.getSystemService(Vibrator::class.java)
+            ?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 30, 70, 30), -1))
+    }
 }

@@ -93,6 +93,16 @@ class TalkMachineTest {
     @Test fun recorderErrorReturnsToIdleWithMessage() =
         assertEquals(TalkUi.Idle("Mic unavailable"), run(TalkEvent.RecError("Mic unavailable"), from = TalkUi.Listening(1)))
 
+    @Test fun cancelEndsListeningWithoutATurn() {
+        assertEquals(TalkUi.Idle(), run(TalkEvent.RecCancelled, from = TalkUi.Listening(1)))
+        // A late "saved" after a cancel starts no turn.
+        assertEquals(TalkUi.Idle(), run(TalkEvent.RecCancelled, TalkEvent.Saved, TalkEvent.Uploaded, from = TalkUi.Listening(1)))
+        // Cancel never touches a turn already sent, or a finished one.
+        val w = TalkUi.Waiting(Phase.SENDING)
+        assertEquals(w, run(TalkEvent.RecCancelled, from = w))
+        assertEquals(TalkUi.Done("t"), run(TalkEvent.RecCancelled, from = TalkUi.Done("t")))
+    }
+
     @Test fun staleEventsAreIgnored() {
         val speaking = TalkUi.Speaking("t")
         assertEquals(speaking, run(TalkEvent.ReplyUpdate(Reply.Pending("thinking")), TalkEvent.Offline("x"), TalkEvent.TimedOut, from = speaking))

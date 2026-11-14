@@ -33,6 +33,8 @@ class RecorderActivity : ComponentActivity() {
     private var waiting by mutableIntStateOf(0)
     private var levels by mutableStateOf(FloatArray(TICKS))
     private var startWhenPermitted = false
+    /** Stop was tapped for the recording on screen: a late Cancel tap must not undo the save. */
+    private var stopRequested = false
     private var lastTick = 0L
     private val handler = Handler(Looper.getMainLooper())
 
@@ -52,7 +54,7 @@ class RecorderActivity : ComponentActivity() {
                 pushLevel(state.level)
             }
             if (state is RecorderUi.Saved || state is RecorderUi.Error) waiting = waitingCount()
-            ui = state
+            ui = if (state is RecorderUi.Cancelled) RecorderUi.Idle else state
         }
     }
 
@@ -70,7 +72,11 @@ class RecorderActivity : ComponentActivity() {
                     waiting = waiting,
                     levels = levels,
                     onStart = ::record,
-                    onStop = { VoiceEntry.stopRecording(this) },
+                    onStop = {
+                        stopRequested = true
+                        VoiceEntry.stopRecording(this)
+                    },
+                    onCancel = ::cancel,
                     onNewNote = { ui = RecorderUi.Idle },
                     onInbox = { startActivity(Intent(this, InboxActivity::class.java)) },
                     onTalk = { startActivity(Intent(this, TalkActivity::class.java)) },
@@ -118,11 +124,20 @@ class RecorderActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
             return
         }
+        stopRequested = false
         val pressedAt = VoiceEntry.startRecording(this)
         // Show "recording" right away; the service's first tick (≈100 ms) confirms it.
         levels = FloatArray(TICKS)
         lastTick = SystemClock.elapsedRealtime()
         ui = RecorderUi.Recording(store.stampFor(pressedAt) + NoteStore.AUDIO_EXT, SystemClock.elapsedRealtime(), 0f)
+    }
+
+    /** Discard the recording on screen (nothing saved or sent) and close the recorder. */
+    private fun cancel() {
+        val rec = ui as? RecorderUi.Recording ?: return
+        if (stopRequested) return
+        VoiceEntry.cancelRecording(this, rec.fileName)
+        finish()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {

@@ -32,8 +32,9 @@ data class NoteMeta(
 /**
  * Files in `Android/data/com.orbit/files/notes/`:
  *  - `<stamp>.aac.rec` while recording (ADTS stays playable if we die),
- *  - `<stamp>.aac` + `<stamp>.json` once finalized.
- * Nothing here ever deletes audio.
+ *  - `<stamp>.aac` + `<stamp>.json` once finalized,
+ *  - `<stamp>.aac.cancel` when the user cancelled that recording ([Discards]).
+ * The only audio deleted here is a temp file the user explicitly cancelled.
  */
 class NoteStore(private val context: Context) {
 
@@ -75,7 +76,10 @@ class NoteStore(private val context: Context) {
      */
     fun recoverOrphans(minIdleMs: Long = 0) {
         val now = System.currentTimeMillis()
+        // Cancelled recordings first, so they are never recovered as notes.
+        Discards.sweep(dir, minIdleMs, now).takeIf { it > 0 }?.let { Log.i(TAG, "discarded $it cancelled recording(s)") }
         dir.listFiles { f -> f.name.endsWith(TEMP_SUFFIX) && now - f.lastModified() >= minIdleMs }?.forEach { temp ->
+            if (Discards.isCancelled(temp)) return@forEach // delete failed above; still never a note
             if (temp.length() == 0L) {
                 Log.w(TAG, "empty orphan kept for inspection: ${temp.name}")
                 return@forEach
@@ -101,8 +105,8 @@ class NoteStore(private val context: Context) {
     fun meta(stem: String): NoteMeta? =
         runCatching { JSON.decodeFromString(NoteMeta.serializer(), File(dir, "$stem.json").readText()) }.getOrNull()
 
-    /** Unfinished temp files (counted as waiting by the UI). */
-    fun tempCount(): Int = dir.listFiles { f -> f.name.endsWith(TEMP_SUFFIX) }?.size ?: 0
+    /** Unfinished temp files (counted as waiting by the UI); cancelled ones are not waiting. */
+    fun tempCount(): Int = dir.listFiles { f -> f.name.endsWith(TEMP_SUFFIX) && !Discards.isCancelled(f) }?.size ?: 0
 
     private fun durationOf(file: File): Long =
         runCatching {

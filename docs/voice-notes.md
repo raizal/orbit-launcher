@@ -25,6 +25,7 @@ Rule: one press from the face must start recording within 1 second, with a short
 - Runs in a **foreground Service** with an ongoing notification and a partial wake lock, so it continues with the screen off and if the UI is closed.
 - Request `RECORD_AUDIO` at first launch (runtime permission).
 - Write to a temp name while recording; rename to the final name only after `stop()` succeeds, then write the sidecar. A crash mid-recording must leave a recoverable file — on next start, find temp files and finalize them (an ADTS temp file is playable as-is: rename it, write the sidecar with `duration_ms` read via `MediaMetadataRetriever` or estimated from size, and set `"recovered": true`). Only flag it if it is empty or unreadable.
+- **Cancel** (small grey ✕ left of Stop, recorder and Talk): the one user action that deletes unsent audio. The UI first writes `<stamp>.aac.cancel` next to `<stamp>.aac.rec`, then sends `ACTION_CANCEL` (with the file name) to the service, which stops the recorder and deletes the temp file, then the marker. Stop, orphan recovery and the waiting count all skip a marked temp file, so a cancelled recording is never finalized, queued or uploaded — even if `:voice` dies mid-cancel (the next service start deletes it). Cancel for a different file than the one recording, or with nothing recording, does nothing: a saved note is never deleted. If Stop was tapped first, Cancel is ignored. Cancel closes the screen.
 - Recording state survives the UI being killed (service is the source of truth; UI binds to it).
 
 ## File naming

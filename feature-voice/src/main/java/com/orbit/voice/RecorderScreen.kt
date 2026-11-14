@@ -60,6 +60,7 @@ fun RecorderScreen(
     levels: FloatArray,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onCancel: () -> Unit,
     onNewNote: () -> Unit,
     onInbox: () -> Unit,
     onTalk: () -> Unit,
@@ -69,8 +70,10 @@ fun RecorderScreen(
         when (state) {
             is RecorderUi.Idle -> Idle(waiting, null, onStart, onInbox, onTalk)
             is RecorderUi.Error -> Idle(waiting, state.message, onStart, onInbox, onTalk)
-            is RecorderUi.Recording -> Recording(state, onStop)
+            is RecorderUi.Recording -> Recording(state, onStop, onCancel)
             is RecorderUi.Saved -> Saved(state, onNewNote)
+            // Transient: the activity maps it to Idle (and normally has already closed).
+            is RecorderUi.Cancelled -> Idle(waiting, null, onStart, onInbox, onTalk)
         }
     }
 }
@@ -154,7 +157,7 @@ private fun Idle(waiting: Int, error: String?, onStart: () -> Unit, onInbox: () 
 }
 
 @Composable
-private fun Recording(state: RecorderUi.Recording, onStop: () -> Unit) {
+private fun Recording(state: RecorderUi.Recording, onStop: () -> Unit, onCancel: () -> Unit) {
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(state.startElapsed) {
         while (true) {
@@ -188,6 +191,7 @@ private fun Recording(state: RecorderUi.Recording, onStop: () -> Unit) {
     ) {
         Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(OrbitColors.OnAccent))
     }
+    CancelButton(onCancel, "Cancel recording — discard it")
     CenterText("Screen can turn off", top = 332.dp, size = 12, color = OrbitColors.Muted)
 }
 
@@ -218,6 +222,34 @@ private fun Saved(state: RecorderUi.Saved, onNewNote: () -> Unit) {
         BasicText("New note", style = style(15, FontWeight.SemiBold))
     }
 }
+
+/**
+ * Small grey ✕ left of the big Stop button (not in the design file): stops and
+ * discards the recording and closes the screen. 60 px visual on [OrbitColors.Surface]
+ * so it reads as secondary next to the red Stop; 72 × 72 touch target (≥ 64 real px),
+ * 22 px gap to Stop. Shared with the Talk screen.
+ */
+@Composable
+fun CancelButton(onCancel: () -> Unit, description: String) {
+    Box(
+        Modifier
+            .offset(62.dp, 238.dp)
+            .size(72.dp)
+            .clickable(onClick = onCancel)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(60.dp).clip(CircleShape).background(OrbitColors.Surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            SvgIcon(X_ICON, 24.dp, OrbitColors.Ink, strokeWidth = 2.5f)
+        }
+    }
+}
+
+/** lucide `x`. */
+private const val X_ICON = "M18 6 6 18M6 6l12 12"
 
 /** A line of text centered across the 400-wide canvas, `top` from the design. */
 @Composable

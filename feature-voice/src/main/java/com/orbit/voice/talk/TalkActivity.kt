@@ -76,6 +76,10 @@ class TalkActivity : ComponentActivity() {
     private var replayJob: Job? = null
     private val audioLock = Mutex()
     private var startWhenPermitted = false
+    /** Note name (`<stamp>.aac`) of the recording in progress, for Cancel. */
+    private var recFile: String? = null
+    /** Stop was tapped for this recording: a late Cancel tap must not undo the save. */
+    private var stopRequested = false
     private var lastTick = 0L
     private var turn: Job? = null
     private var player: MediaPlayer? = null
@@ -101,12 +105,14 @@ class TalkActivity : ComponentActivity() {
             when (val state = RecorderState.parse(intent) ?: return) {
                 is RecorderUi.Recording -> {
                     lastTick = SystemClock.elapsedRealtime()
+                    recFile = state.fileName
                     if (ui !is TalkUi.Listening) dispatch(TalkEvent.RecStarted(state.startElapsed))
                     pushLevel(state.level)
                     dispatch(TalkEvent.Level(state.level))
                 }
                 is RecorderUi.Saved -> if (ui is TalkUi.Listening) onSaved(state.fileName.removeSuffix(NoteStore.AUDIO_EXT))
                 is RecorderUi.Error -> dispatch(TalkEvent.RecError(state.message))
+                is RecorderUi.Cancelled -> dispatch(TalkEvent.RecCancelled)
                 is RecorderUi.Idle -> Unit
             }
         }
@@ -136,7 +142,11 @@ class TalkActivity : ComponentActivity() {
                         dispatch(TalkEvent.Reset)
                         record()
                     },
-                    onStop = { VoiceEntry.stopRecording(this) },
+                    onStop = {
+                        stopRequested = true
+                        VoiceEntry.stopRecording(this)
+                    },
+                    onCancel = ::cancel,
                     onSkip = {
                         stopPlayback()
                         dispatch(TalkEvent.PlaybackEnded) // also if the audio is still downloading
@@ -158,6 +168,7 @@ class TalkActivity : ComponentActivity() {
         // A recording already running (e.g. reopened mid-turn): show it as listening.
         RecorderState.readMarker(this)?.let {
             lastTick = SystemClock.elapsedRealtime()
+            recFile = it.fileName
             dispatch(TalkEvent.RecStarted(it.startElapsed))
         }
         handler.post(watchdog)
@@ -200,10 +211,25 @@ class TalkActivity : ComponentActivity() {
         if (ui is TalkUi.Listening || ui is TalkUi.Waiting) return
         turn?.cancel()
         stopPlayback()
-        VoiceEntry.startRecording(this, MODE_TALK, if (history.file.nextIsNew) CONVERSATION_NEW else null)
+        stopRequested = false
+        val pressedAt = VoiceEntry.startRecording(this, MODE_TALK, if (history.file.nextIsNew) CONVERSATION_NEW else null)
+        recFile = store.stampFor(pressedAt) + NoteStore.AUDIO_EXT
         levels = FloatArray(TICKS)
         lastTick = SystemClock.elapsedRealtime()
         dispatch(TalkEvent.RecStarted(SystemClock.elapsedRealtime()))
+    }
+
+    /**
+     * Discards the turn being recorded and closes Talk. The recording is deleted
+     * before it becomes a note, so there is no upload, transcription, diary entry
+     * or reply; earlier turns, the queue and the conversation are untouched.
+     */
+    private fun cancel() {
+        val file = recFile
+        if (ui !is TalkUi.Listening || stopRequested || file == null) return
+        VoiceEntry.cancelRecording(this, file)
+        dispatch(TalkEvent.RecCancelled)
+        finish()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {

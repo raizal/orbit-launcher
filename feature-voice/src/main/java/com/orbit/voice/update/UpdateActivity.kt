@@ -37,6 +37,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * "Update available — vX": shows the offered build and installs it on tap
@@ -54,7 +57,7 @@ class UpdateActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val installed = AppUpdates.installedName(this)
+        val installed = Build(AppUpdates.installedName(this), AppUpdates.installedCode(this))
         setContent {
             val ready by AppUpdates.ready.collectAsState()
             val status by Installer.status.collectAsState()
@@ -132,6 +135,11 @@ class UpdateActivity : ComponentActivity() {
         }
     }
 
+    private class Build(val name: String, code: Long) {
+        val built: String? = UpdateLogic.builtAtMs(code)?.let { SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(it)) }
+        val label: String get() = listOfNotNull(UpdateLogic.commitOf(name), built).joinToString(" · ")
+    }
+
     private data class View(val status: String, val statusColor: Color, val action: String, val enabled: Boolean)
 
     private fun viewOf(ready: UpdateInfo?, status: Installer.Status): View = when {
@@ -149,13 +157,14 @@ class UpdateActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun UpdateScreen(installed: String, ready: UpdateInfo?, view: View, onAction: () -> Unit) {
+    private fun UpdateScreen(installed: Build, ready: UpdateInfo?, view: View, onAction: () -> Unit) {
         Box(Modifier.size(400.dp)) {
             CurvedText(if (ready != null) "UPDATE AVAILABLE" else "ORBIT UPDATES", top = true, color = OrbitColors.Muted, sizeSp = 13f, letterSpacingPx = 2.5f)
-            val (main, sub) = (ready?.version_name ?: installed).split('-', limit = 2).let { it[0] to it.getOrNull(1) }
-            centered(if (ready != null) "Installed $installed" else "Installed", 88, 13, OrbitColors.Muted)
-            centered("v$main", 116, 40, if (ready != null) OrbitColors.Accent else OrbitColors.Ink, OrbitFonts.Grotesk, FontWeight.SemiBold)
-            centered(sub ?: " ", 166, 13, OrbitColors.Muted)
+            // Every build is "0.1.0-<commit>": show the commit big and the build time (from versionCode) under it.
+            val shown = ready?.let { Build(it.version_name, it.version_code) } ?: installed
+            centered(if (ready != null) "Installed ${installed.label}" else "Installed", 88, 13, OrbitColors.Muted)
+            centered(UpdateLogic.commitOf(shown.name), 116, 40, if (ready != null) OrbitColors.Accent else OrbitColors.Ink, OrbitFonts.Grotesk, FontWeight.SemiBold)
+            centered(shown.built?.let { "built $it" } ?: shown.name, 166, 13, OrbitColors.Muted)
             BasicText(
                 view.status,
                 Modifier.offset(72.dp, 196.dp).width(256.dp),

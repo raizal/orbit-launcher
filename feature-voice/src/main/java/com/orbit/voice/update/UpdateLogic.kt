@@ -40,10 +40,18 @@ object UpdateLogic {
     fun dueForCheck(lastCheckMs: Long, nowMs: Long): Boolean =
         nowMs - lastCheckMs >= MIN_CHECK_INTERVAL_MS || nowMs < lastCheckMs // clock went back
 
+    /** versionCode = minutes since 2026-01-01T00:00Z at build time (app/build.gradle.kts); null for older schemes. */
+    fun builtAtMs(versionCode: Long): Long? = if (versionCode >= 1_000) EPOCH_2026_MS + versionCode * 60_000 else null
+
+    /** `0.1.0-95017bf` → `95017bf`; a name without a commit is shown as is. */
+    fun commitOf(versionName: String): String = versionName.substringAfter('-', versionName)
+
+    private const val EPOCH_2026_MS = 1_767_225_600_000L
+
     /** Only a path on the paired companion (never another host). */
     fun safePath(p: String): String = p.takeIf { it.startsWith("/") && !it.startsWith("//") } ?: "/v1/app/apk"
 
-    /** A recording is being written: a non-cancelled `.rec` modified within [REC_ACTIVE_MS]. */
+    /** A recording is being written: any `.rec` (even one being cancelled) modified within [REC_ACTIVE_MS]. */
     fun recordingActive(files: List<Pair<String, Long>>, nowMs: Long): Boolean = files.any { (name, modified) ->
         name.endsWith(NoteStore.TEMP_SUFFIX) && nowMs - modified < REC_ACTIVE_MS
     }

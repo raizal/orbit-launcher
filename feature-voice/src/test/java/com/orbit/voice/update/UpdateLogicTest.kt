@@ -86,4 +86,12 @@ class UpdateLogicTest {
         assertFalse(UpdateLogic.verify(f, info.copy(sha256 = sha)))
         assertFalse(UpdateLogic.verify(File(f.path + ".missing"), info))
     }
+
+    @Test fun buildTimeAndCommitForDisplay() {
+        // 457707 minutes after 2026-01-01T00:00Z = 2026-11-14T20:27Z
+        assertEquals(java.time.Instant.parse("2026-11-14T20:27:00Z").toEpochMilli(), UpdateLogic.builtAtMs(457707))
+        assertNull(UpdateLogic.builtAtMs(1))
+        assertEquals("95017bf", UpdateLogic.commitOf("0.1.0-95017bf"))
+        assertEquals("0.1.0", UpdateLogic.commitOf("0.1.0"))
+    }
 }

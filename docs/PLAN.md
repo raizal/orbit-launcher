@@ -36,7 +36,7 @@ Spec: `docs/companion.md`. Can be built in parallel with 1c (1c needs at least t
 
 **Checkpoint:** speak 3 notes during a day → next morning a diary page exists with transcripts and links to audio.
 
-## Phase 3 — Orbit Launcher
+## Phase 3 — Orbit Launcher — ✅ built (all screens); not yet default HOME; notifications blocked by ROM (see device-facts)
 
 Spec: `docs/launcher.md`. Order: face renderer (JSON → Compose Canvas) → swipe navigation → **diary shortcuts wired in (rotary on face → diary side panel, face mic slot, center of app grid)** → honeycomb app grid → quick settings → notifications → curved list → face picker / customize. Then set Orbit as the default HOME app. The diary must keep working unchanged when Orbit becomes HOME.
 

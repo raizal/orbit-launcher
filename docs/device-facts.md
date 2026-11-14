@@ -107,3 +107,10 @@ Levels: quiet room ≈ −51 dB mean. Raiz's own speech samples: **mean −26 to
 2. 30-min screen-off recording **unplugged** (USB charging disables doze and probably the vendor power saver). Plugged run of 3.5 min was fine; screen off + `PARTIAL_WAKE_LOCK` held.
 
 Testing note: the watch has a **secure lock screen**. adb tests can't unlock it; the probe activity uses `setShowWhenLocked(true)` to run over it. Raw input can be simulated without touching the watch: `sendevent /dev/input/event0 2 0 9; sendevent /dev/input/event0 0 0 0` (rotary), `sendevent /dev/input/event5 1 67 1|0` + SYN (F9 down/up).
+
+## Found during Phase 3 (2026-11-14)
+
+- **Notification listeners can't bind on this ROM.** Ours (and the already-approved `com.ricktop.ClockSkinCoco`) is listed as allowed, but `NotificationListeners: Unable to bind notification listener service` every time (after install, reinstall, settings toggle), with no reason logged. `cmd notification allow_listener` silently does nothing on 8.1; `settings put secure enabled_notification_listeners` marks it allowed but binding still fails. Likely the vendor auto-start restriction. → The notifications panel shows its "access is off" state. Open issue.
+- **Location:** `getLastKnownLocation` is null for all providers; a single NETWORK_PROVIDER update does work (weather loads: 34°, sunrise 04:59 / sunset 17:26 for the watch's area).
+- Launcher shows the stock lock screen when locked (correct). For adb checks, debug builds accept `--ez overLock true`.
+- Orbit is **not** set as default HOME yet. To switch: `adb shell cmd package set-home-activity com.orbit/com.orbit.launcher.LauncherActivity`; back to stock: `adb shell cmd package set-home-activity com.hsc.launcher3/.Launcher`.

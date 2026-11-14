@@ -1,5 +1,7 @@
 package com.orbit.voice.upload
 
+import com.orbit.voice.talk.Reply
+import com.orbit.voice.talk.ReplyParser
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -71,6 +73,24 @@ class OrbitClient(socketFactory: SocketFactory = SocketFactory.getDefault()) {
         return http.newCall(req).execute().use { r ->
             if (r.code != 200 && r.code != 201) throw HttpError(r.code)
             JSON.decodeFromString(PutResult.serializer(), r.body.string()).sha256
+        }
+    }
+
+    /** GET /v1/notes/{id}/reply (docs/talk.md). Throws on network errors only. */
+    fun reply(ip: String, port: Int, token: String, id: String): Reply =
+        http.newCall(
+            Request.Builder().url("http://$ip:$port/v1/notes/$id/reply").header("Authorization", "Bearer $token").build()
+        ).execute().use { r -> ReplyParser.parse(r.code, r.body.string(), id) }
+
+    /** Downloads [path] (e.g. `/v1/notes/{id}/reply.wav`) from the companion into [dest]. */
+    fun download(ip: String, port: Int, token: String, path: String, dest: File) {
+        http.newCall(
+            Request.Builder().url("http://$ip:$port$path").header("Authorization", "Bearer $token").build()
+        ).execute().use { r ->
+            if (!r.isSuccessful) throw HttpError(r.code)
+            val tmp = File(dest.path + ".part")
+            tmp.outputStream().use { out -> r.body.byteStream().copyTo(out) }
+            if (!tmp.renameTo(dest)) error("rename failed: ${dest.name}")
         }
     }
 

@@ -54,6 +54,13 @@ class Queue(context: Context) {
 
     fun unsent(): List<Note> = notes().filter { it.state != NoteState.SENT }.sortedBy { it.stem }
 
+    /** Upload state of one note and its last error, without reading every sidecar. */
+    fun status(stem: String): Pair<NoteState, String?> {
+        if (Progress.sending.value.containsKey(stem)) return NoteState.SENDING to null
+        val e = entry(stem) ?: return NoteState.WAITING to null
+        return (e.state.takeIf { it != NoteState.SENDING } ?: NoteState.WAITING) to e.error
+    }
+
     fun markSent(stem: String) = write(stem, QueueEntry(NoteState.SENT, sentAtMs = System.currentTimeMillis()))
 
     fun markFailed(stem: String, error: String) = write(stem, QueueEntry(NoteState.FAILED, error = error))

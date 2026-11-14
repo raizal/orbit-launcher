@@ -25,6 +25,18 @@
             </intent-filter>
         </activity>
 
+        <!-- Talk: journaling with spoken feedback (docs/talk.md). -->
+        <activity
+            android:name=".talk.TalkActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Orbit.Voice">
+            <intent-filter>
+                <action android:name="com.orbit.action.TALK" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".InboxActivity"
             android:exported="false"

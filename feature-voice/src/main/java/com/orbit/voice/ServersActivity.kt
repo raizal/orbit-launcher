@@ -52,6 +52,7 @@ import com.orbit.voice.upload.Discovery
 import com.orbit.voice.upload.FoundServer
 import com.orbit.voice.upload.OrbitClient
 import com.orbit.voice.upload.Pairing
+import com.orbit.voice.upload.Progress
 import com.orbit.voice.upload.ServerPrefs
 import com.orbit.voice.upload.Uploads
 import com.orbit.voice.upload.WifiNow
@@ -122,6 +123,7 @@ class ServersActivity : ComponentActivity() {
         prefs.home = wifi.toHome()
         prefs.lastIp = null
         paired = p
+        Progress.changed() // "sent" is per companion: screens re-read the queue for this one
         Log.i("OrbitUpload", "paired ${p.name} on ${wifi.ssid ?: wifi.subnet}")
         refresh()
     }

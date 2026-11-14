@@ -1,0 +1,22 @@
+# Orbit Notes companion as a systemd *user* service (installed by deploy/install.sh).
+# Runs as you, natively, so it can use your `codex` login and the `bb` CLI.
+[Unit]
+Description=Orbit Notes companion (watch uploads, transcription, Talk, diary)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@COMPANION_DIR@
+ExecStart=@COMPANION_DIR@/.venv/bin/orbit-notes serve
+# codex (pnpm shim -> node from nvm), bb, ffmpeg; codex first: nvm has an older global codex. Captured at install time; re-run install.sh after
+# moving node/codex/bb (e.g. an nvm upgrade).
+Environment=PATH=@PATH@
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+# Whisper + Codex can be heavy; stay polite to the desktop.
+Nice=5
+
+[Install]
+WantedBy=default.target

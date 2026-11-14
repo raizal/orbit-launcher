@@ -69,3 +69,20 @@ requests from this computer (the LAN gets 403), because it exposes transcripts a
 The page is a Svelte app in `web/`, built into `src/orbit_notes/web/` (committed, so serving needs no Node).
 After changing it: `cd web && npm install && npm run build`. For live editing: `npm run dev` (proxies the API
 to a running server on 8765).
+
+## Run as a service (recommended)
+
+The companion runs as a **systemd user service**: it starts when you log in, restarts itself if it
+crashes, and runs natively so it can use your `codex` login and the `bb` CLI.
+
+```
+deploy/install.sh                          # install, or update after code changes (uv sync + restart)
+systemctl --user restart orbit-notes       # restart
+systemctl --user status orbit-notes        # is it running?
+journalctl --user -u orbit-notes -f        # live logs
+systemctl --user disable --now orbit-notes # stop and don't start at login
+```
+
+The unit's PATH (codex, bb, node, ffmpeg) is captured when `install.sh` runs — re-run it after moving
+any of them (e.g. an nvm node upgrade). It runs while you're logged in; to keep it running after
+logout too: `loginctl enable-linger $USER`.

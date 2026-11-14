@@ -1229,6 +1229,16 @@ def term_re(term: str) -> re.Pattern:
 
 # --- Talk integration (talk.py calls these) -----------------------------------------------------------
 
+
+def safe_evidence(fn, title: str = "MEMORY") -> str:
+    """Evidence text for a talk turn; a failure is reported to Codex as 'no evidence', never fails the turn."""
+    try:
+        return fn() or ""
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return f"{title}: could not be searched right now ({e}). You have no memory evidence this turn."
+
+
 ACTION_KINDS = ("memory_fact", "memory_forget")
 ACTION_PARAMS = {"memory_fact": ({"op", "fact_id"}, {"text", "topic", "kind"}), "memory_forget": ({"query"}, set())}
 
@@ -1279,13 +1289,18 @@ RECALL_SCHEMA = {"type": "array", "items": {
     "properties": {"query": {"type": "string"}, "from": {"type": "string"}, "to": {"type": "string"}}}}
 
 
-def extend_turn_schema(schema: dict) -> dict:
-    """Add `memory` (facts + tags of this note) and `need_details.recall` to the talk turn's output schema."""
-    schema["properties"]["memory"] = TURN_SCHEMA
-    schema["required"].append("memory")
+def extend_recall_schema(schema: dict) -> dict:
+    """Add `need_details.recall` (the detail round's memory searches) to the talk turn's output schema."""
     nd = schema["properties"]["need_details"]
     nd["properties"]["recall"] = RECALL_SCHEMA
     nd["required"].append("recall")
+    return schema
+
+
+def extend_fact_schema(schema: dict) -> dict:
+    """Add `memory` (facts + tags of this voice note) to the talk turn's output schema."""
+    schema["properties"]["memory"] = TURN_SCHEMA
+    schema["required"].append("memory")
     return schema
 
 
@@ -1309,13 +1324,14 @@ FACT_RULE = """durable facts about him that are clearly stated (people and pets 
   fact: relation "confirms" + its id. If he clearly says something changed: relation "replaces" + the old id and
   confidence high. If unsure whether it contradicts a known fact, leave it out. Usually there are none."""
 
-RULES = f"""- Memory. The MEMORY section is what the companion retrieved from his earlier voice notes, your earlier
+RECALL_RULES = """- Memory. The MEMORY section is what the companion retrieved from his earlier voice notes, your earlier
   replies, diary pages and known facts. Use it when it helps (a name, a plan he made), but never present a
   recalled item without its date ("on Monday 3 November you said …"). If he asks about the past and MEMORY does
   not answer it, say plainly that you have no memory of that — never invent or guess a memory. In your one
   detail round you may ask for need_details.recall (at most 3 searches: query words, and from / to as
-  YYYY-MM-DD or "").
-- Facts and tags, private bookkeeping: in EVERY answer fill memory.facts with {FACT_RULE}
+  YYYY-MM-DD or ""); his notes mix Indonesian and English, so a second search in the other language can help."""
+
+FACT_RULES = f"""- Facts and tags, private bookkeeping: in EVERY answer fill memory.facts with {FACT_RULE}
   memory.tags: the people, places, projects and topics this note mentions. Never mention this bookkeeping. When
   he says "remember that …", record it as a fact and simply say you will remember it.
 - Memory changes (confirm first, like any action): "that's wrong / actually it's …" about a known fact ->

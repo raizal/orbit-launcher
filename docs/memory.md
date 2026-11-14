@@ -113,3 +113,28 @@ tests never download a model).
                           forgotten, bytes, model}
   ```
   Web UI → **Memory**: search box (+ optional date range) with dated results.
+
+### Recall in Talk (step 2)
+
+- Every turn (`Memory.turn_evidence`, called from `Talker.respond`): a **MEMORY** section after the other
+  evidence: the known facts (step 3) and episodic hits, each line `- Tue 03 Nov 2026 21:14, voice note: "…"`
+  (labels: voice note / talk turn, his words / Orbit's reply to him / diary page / his saved reflection).
+  The current note and the other turns of its conversation are never "recalled" (already in the session).
+- **Everyday turn**: up to 3 hits that share a content word with the transcript (keyword-confirmed), ≤ ~1500
+  chars; "No earlier notes matched this voice note closely." otherwise.
+- **Explicit recall question** (`RECALL_RE`: remember / did I say / what did I / when did I / ingat / pernah /
+  kapan aku / aku bilang apa …): up to 10 hybrid hits, ≤ ~4500 chars, restricted to a date range the question
+  names; a range with < 4 hits is filled with that period's diary prose and notes. The section states the
+  covered span ("his notes from Sat 14 Nov 2026 to Sun 15 Nov 2026 (45 notes)") and that a hit is not
+  necessarily about what he asks; with no hits: "NOTHING in his notes matched this. Say plainly that you have
+  no memory of it …".
+- **Detail round**: `need_details.recall: [{query, from, to}]` (≤ 3 searches; dates `YYYY-MM-DD` or "") →
+  `RECALL SEARCH "…" between … and …:` + up to 10 dated hits each, in the same single detail round as the
+  workspace / insight details.
+- Rules (sent every turn): never present a recalled item without its date; if MEMORY does not answer a question
+  about the past, say there is no memory of it; never invent one; try the other language (ID/EN) in a detail
+  search. The old rule "the AI model … memory of past days: fixed" now says the past reaches Codex through MEMORY.
+- A memory failure never fails the turn: Codex is told "MEMORY: could not be searched right now (…)".
+- `talk.py` touch points: `import memory`; `RULES += memory.RECALL_RULES`; `memory.extend_recall_schema(OUTPUT_SCHEMA)`;
+  `MEMORY_DETAILS` in `wants_details`; `Talker(mem=…)` + `self.memory.warm()` in `warm()`; two evidence lines in
+  `respond()` (turn + detail round).

@@ -137,3 +137,78 @@ def test_memory_search_api_is_loopback_only(client, store, cfg):
     st = c.get("/ui/api/memory/status").json()
     assert st["chunks"] == 1 and st["model"] == "fake"
     assert ui_client(cfg, store, host="192.168.1.20").get("/ui/api/memory/search?q=x").status_code == 403
+
+
+# --- recall in Talk (step 2) -------------------------------------------------------------------------------
+
+from test_workspace import answer, bb, codex, repo, talk  # noqa: E402,F401 (fixtures)
+
+
+def prompt_of(call):
+    return call["prompt"]
+
+
+def test_recall_question_gets_dated_hits(talk, codex, client, store, cfg):
+    add_note(client, store, "2026-11-03T21:14:00+07:00", "The database migration to Postgres went fine today.")
+    add_note(client, store, "2026-11-04T09:00:00+07:00", "Bought new running shoes.")
+    Memory(cfg, store).sync()
+    codex.script(answer("On Tuesday 3 November you said the migration went fine."))
+    talk("What did I say about the migration?")
+    p = prompt_of(codex.calls()[0])
+    assert "MEMORY (retrieved by the companion" in p
+    assert "He is asking about the past." in p
+    assert '- Tue 03 Nov 2026 21:14, voice note: "The database migration to Postgres went fine today."' in p
+    assert "running shoes" not in p.split("MEMORY (retrieved")[1]
+    assert "never invent or guess a memory" in p  # the recall rules go with every turn
+
+
+def test_recall_without_a_match_says_so(talk, codex, client, store, cfg):
+    add_note(client, store, "2026-11-03T21:14:00+07:00", "The database migration to Postgres went fine today.")
+    Memory(cfg, store).sync()
+    codex.script(answer("I don't have any memory of that."))
+    talk("Do you remember what I said about my sister's wedding?")
+    p = prompt_of(codex.calls()[0])
+    # the fake embedder still ranks *something*; the instruction makes Codex judge relevance
+    assert "a search hit is NOT necessarily about what he asks" in p or "NOTHING in his notes matched" in p
+
+
+def test_everyday_turn_uses_keyword_hits_and_skips_this_conversation(talk, codex, client, store, cfg):
+    add_note(client, store, "2026-11-03T21:14:00+07:00", "Dewi said the Bandung office moves in December.")
+    Memory(cfg, store).sync()
+    codex.script(answer("Nice."), answer("Okay."))
+    talk("Had coffee with Dewi this morning.")
+    p = prompt_of(codex.calls()[0])
+    assert "Earlier notes sharing words with this voice note" in p and "Bandung office" in p
+    Memory(cfg, store).sync()  # in `serve` the worker indexes each turn after it was answered
+    talk("Dewi again, she brought cake.")
+    p2 = prompt_of(codex.calls()[1])
+    assert "Had coffee with Dewi" not in p2.split("MEMORY (retrieved")[1]  # same conversation: already in context
+
+
+def test_detail_round_recall_search(talk, codex, client, store, cfg):
+    add_note(client, store, "2026-11-03T21:14:00+07:00", "The database migration to Postgres went fine today.")
+    Memory(cfg, store).sync()
+    codex.script(answer("Let me check.", need={"recall": [{"query": "Postgres", "from": "2026-11-01", "to": "2026-11-05"},
+                                                           {"query": "wedding", "from": "", "to": ""}]}),
+                 answer("On 3 November you said the migration to Postgres went fine."))
+    reply, _ = talk("Tell me about the database thing.")
+    assert reply == "On 3 November you said the migration to Postgres went fine."
+    p = prompt_of(codex.calls()[1])
+    assert 'RECALL SEARCH "Postgres" between 2026-11-01 and 2026-11-05:' in p
+    assert '- Tue 03 Nov 2026 21:14, voice note: "The database migration to Postgres went fine today."' in p
+    assert 'RECALL SEARCH "wedding":' in p
+
+
+def test_turn_schema_has_recall():
+    from orbit_notes.talk import OUTPUT_SCHEMA
+
+    nd = OUTPUT_SCHEMA["properties"]["need_details"]
+    assert "recall" in nd["required"] and nd["properties"]["recall"]["items"]["required"] == ["query", "from", "to"]
+
+
+def test_memory_failure_never_costs_the_turn(talk, codex, monkeypatch):
+    monkeypatch.setattr(Memory, "turn_evidence", lambda *a: 1 / 0)
+    codex.script(answer("Okay."))
+    reply, _ = talk("What did I say yesterday?")
+    assert reply == "Okay."
+    assert "MEMORY: could not be searched right now" in prompt_of(codex.calls()[0])

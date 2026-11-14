@@ -40,7 +40,7 @@ def serve(config: ConfigOpt = None, mdns: bool = typer.Option(True, help="Advert
 
     cfg, store = _load(config)
     memory = Memory(cfg, store)  # the embedding model loads lazily (first search / background indexing)
-    talker = Talker(cfg, store) if cfg.talk_provider != "none" else None
+    talker = Talker(cfg, store, mem=memory) if cfg.talk_provider != "none" else None
     w = Worker(store, Transcriber(cfg), talker, memory) if worker else None
     app_ = create_app(cfg, store, on_stored=w.enqueue if w else (lambda _id: None),
                       lifespan=serve_lifespan(cfg, w, advertise=mdns))

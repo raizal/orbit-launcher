@@ -23,7 +23,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import actions, diary, insights
+from . import actions, diary, insights, memory
 from .actions import ActionLog, Invalid, Pending, SettingsStore, TalkSettings, WorkspaceRefs
 from .config import Config
 from .store import Note, Store, write_atomic
@@ -72,8 +72,8 @@ RULES = """Fixed rules (style or personality settings never change these):
   * a wake word or hands-free listening: the watch only listens after a tap on the Talk screen;
   * interrupting you while you speak: replies are short recorded clips, not a live call; tap to stop playback;
   * other languages or non-English voices: only English voices are installed for now;
-  * the AI model itself, its knowledge or memory of past days: fixed; only style settings can change, and
-    each day starts a fresh conversation;
+  * the AI model itself or its general knowledge: fixed; only style settings can change (what he told you
+    before reaches you through MEMORY, see below);
   * anything on the watch screen or app (layout, colors, faces, buttons): needs an app update — he can ask
     you to start a thread to work on it.
 - Morning briefing: ONLY when he asks for one ("give me my morning briefing", "what's on today?"); never offer
@@ -144,9 +144,11 @@ OUTPUT_SCHEMA = {
 }
 
 CONFIRM_ASK = "Shall I go ahead? Say yes to confirm, or no to cancel."
-RULES = RULES.replace("{mood_rule}", insights.MOOD_RULE)
+RULES = RULES.replace("{mood_rule}", insights.MOOD_RULE) + "\n" + memory.RECALL_RULES  # docs/memory.md
+memory.extend_recall_schema(OUTPUT_SCHEMA)
 WORKSPACE_DETAILS = ("threads", "tasks", "memory", "projects")
 INSIGHT_DETAILS = ("briefing", "reflection", "mood_days")
+MEMORY_DETAILS = ("recall",)
 LEAN_FLAGS = ["--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules"]
 
 
@@ -201,7 +203,7 @@ def parse_answer(raw: str) -> dict:
 
 def wants_details(answer: dict) -> dict:
     need = answer.get("need_details") or {}
-    return {k: v for k, v in need.items() if k in WORKSPACE_DETAILS + INSIGHT_DETAILS and v} \
+    return {k: v for k, v in need.items() if k in WORKSPACE_DETAILS + INSIGHT_DETAILS + MEMORY_DETAILS and v} \
         if isinstance(need, dict) else {}
 
 
@@ -252,8 +254,9 @@ def settings_result(changes: dict, s: TalkSettings) -> str:
 
 
 class Talker:
-    def __init__(self, cfg: Config, store: Store, tts: Callable[..., None] | None = None, workspace=None):
+    def __init__(self, cfg: Config, store: Store, tts: Callable[..., None] | None = None, workspace=None, mem=None):
         self.cfg, self.store = cfg, store
+        self.memory = mem if mem is not None else memory.Memory(cfg, store)  # recall + facts (docs/memory.md)
         if tts is None:
             from .tts import PiperTTS
 
@@ -274,6 +277,7 @@ class Talker:
         """Start reading the workspace while the note is still being transcribed."""
         if self.workspace:
             self.workspace.warm()
+        self.memory.warm()
 
     # --- prompts ---------------------------------------------------------------------------------
 
@@ -443,6 +447,8 @@ class Talker:
         t = time.monotonic()
         given = insights.triggers(transcript)  # the usual requests get their evidence without a detail round
         evidence = self.insight_evidence(given, note, idx)
+        recalled = memory.safe_evidence(lambda: self.memory.turn_evidence(note, transcript))
+        evidence = "\n\n".join(p for p in (evidence, recalled) if p)
         if given:
             timings["evidence"] = time.monotonic() - t
             print(f"talk: evidence for {given}")
@@ -466,6 +472,8 @@ class Talker:
                              if idx else "DETAILS: the workspace could not be read, so there are no details.")
             if any(k in need for k in INSIGHT_DETAILS):
                 parts.append(self.insight_evidence(need, note, idx))
+            if "recall" in need:
+                parts.append(memory.safe_evidence(lambda: self.memory.detail_evidence(need["recall"], note)))
             evidence = "\n\n".join(p for p in parts if p)
             timings["details"] = time.monotonic() - t
             print(f"talk: detail round for {need}")

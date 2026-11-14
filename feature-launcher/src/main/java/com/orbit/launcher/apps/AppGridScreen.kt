@@ -36,7 +36,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -92,6 +94,7 @@ fun AppGridScreen(nav: LauncherNav, env: LauncherEnv) {
     val scope = rememberCoroutineScope()
     val jobs = remember { arrayOfNulls<Job>(2) } // [pan, zoom] animations
     val currentApps by rememberUpdatedState(apps)
+    val haptics = LocalHapticFeedback.current
 
     fun panTo(tx: Float, ty: Float) {
         jobs[0]?.cancel()
@@ -148,6 +151,17 @@ fun AppGridScreen(nav: LauncherNav, env: LauncherEnv) {
                                 !Honeycomb.tappable(Honeycomb.distance(grid, i, panX, panY, sp)) -> snapToCell(i)
                                 i == 0 -> nav.openDiary()
                                 else -> currentApps.getOrNull(i - 1)?.let { nav.launch(it.intent()) }
+                            }
+                        },
+                        onLongPress = { tx, ty ->
+                            // Hold an app icon → its App info page. The diary cell and dimmed edge cells do nothing.
+                            val sp = Honeycomb.SPACING * zoom
+                            val i = Honeycomb.hit(grid, tx, ty, panX, panY, sp)
+                            if (i > 0 && Honeycomb.tappable(Honeycomb.distance(grid, i, panX, panY, sp))) {
+                                currentApps.getOrNull(i - 1)?.let {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    nav.launch(it.infoIntent())
+                                }
                             }
                         },
                     )

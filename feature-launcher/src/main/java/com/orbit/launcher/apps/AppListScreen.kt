@@ -35,7 +35,9 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -81,8 +83,24 @@ fun AppListScreen(nav: LauncherNav, env: LauncherEnv) {
     val last = (list.size - 1).coerceAtLeast(0)
     val currentApps by rememberUpdatedState(list)
     val currentLast by rememberUpdatedState(last)
+    val haptics = LocalHapticFeedback.current
+
 
     val pos = remember { mutableFloatStateOf(AppCache.listPos.coerceIn(0f, last.toFloat())) }
+
+    /** The visible row under design-y [ty], if any. */
+    fun rowAt(ty: Float): AppEntry? {
+        val p = pos.floatValue
+        val b = p.roundToInt()
+        var hit = -1
+        var best = 34f
+        for (i in b - 2..b + 2) {
+            if (i !in currentApps.indices) continue
+            val d = abs(CurvedList.y(i - p) - ty)
+            if (d < best) { best = d; hit = i }
+        }
+        return currentApps.getOrNull(hit)
+    }
     DisposableEffect(Unit) { onDispose { AppCache.listPos = pos.floatValue } }
     val scope = rememberCoroutineScope()
     val job = remember { arrayOfNulls<Job>(1) }
@@ -113,17 +131,13 @@ fun AppListScreen(nav: LauncherNav, env: LauncherEnv) {
                     pos.floatValue = (pos.floatValue - dy / CurvedList.ROW_PX).coerceIn(-0.3f, currentLast + 0.3f)
                 },
                 onEnd = { _, vy -> settle(pos.floatValue - vy * 0.2f / CurvedList.ROW_PX) },
-                onTap = { _, ty ->
-                    val p = pos.floatValue
-                    val b = p.roundToInt()
-                    var hit = -1
-                    var best = 34f
-                    for (i in b - 2..b + 2) {
-                        if (i !in currentApps.indices) continue
-                        val d = abs(CurvedList.y(i - p) - ty)
-                        if (d < best) { best = d; hit = i }
+                onTap = { _, ty -> rowAt(ty)?.let { nav.launch(it.intent()) } },
+                onLongPress = { _, ty ->
+                    // Hold a row → that app's App info page.
+                    rowAt(ty)?.let {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        nav.launch(it.infoIntent())
                     }
-                    if (hit >= 0) nav.launch(currentApps[hit].intent())
                 },
             )
         },

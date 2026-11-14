@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.provider.Settings
+import android.net.Uri
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -35,6 +37,10 @@ class AppEntry(val label: String, val component: ComponentName, val icon: ImageB
         .addCategory(Intent.CATEGORY_LAUNCHER)
         .setComponent(component)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+
+    /** System "App info" page for this app (long-press on its icon). */
+    fun infoIntent(): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        .setData(Uri.fromParts("package", component.packageName, null))
 }
 
 /**
@@ -153,14 +159,16 @@ object AppCache {
 internal const val TOP_GUARD = 40f
 
 /**
- * One pointer: a tap, or a drag (after touch slop). Positions/deltas are reported in design
- * units (RoundScreen makes 1 dp = 1 design px), velocity in design units per second.
+ * One pointer: a tap, a long-press (held still past the system long-press timeout), or a drag
+ * (after touch slop). Positions/deltas are reported in design units (RoundScreen makes
+ * 1 dp = 1 design px), velocity in design units per second.
  */
 internal suspend fun PointerInputScope.dragOrTap(
     onStart: () -> Unit,
     onDrag: (dx: Float, dy: Float) -> Unit,
     onEnd: (vx: Float, vy: Float) -> Unit,
     onTap: (x: Float, y: Float) -> Unit,
+    onLongPress: ((x: Float, y: Float) -> Unit)? = null,
 ) = awaitEachGesture {
     val down = awaitFirstDown(requireUnconsumed = false)
     val k = 1f / density
@@ -169,8 +177,24 @@ internal suspend fun PointerInputScope.dragOrTap(
     tracker.addPosition(down.uptimeMillis, down.position)
     var dragging = false
     var acc = Offset.Zero
+    val longPressAt = down.uptimeMillis + viewConfiguration.longPressTimeoutMillis
     while (true) {
-        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+        val event = if (onLongPress != null && !dragging) {
+            val wait = longPressAt - (currentEvent.changes.firstOrNull()?.uptimeMillis ?: down.uptimeMillis)
+            withTimeoutOrNull(wait.coerceAtLeast(1)) { awaitPointerEvent() }
+        } else {
+            awaitPointerEvent()
+        }
+        if (event == null) {
+            // Held still long enough: long-press, then swallow the rest of this gesture.
+            onLongPress!!(down.position.x * k, down.position.y * k)
+            do {
+                val rest = awaitPointerEvent()
+                rest.changes.forEach { it.consume() }
+            } while (rest.changes.any { it.pressed })
+            return@awaitEachGesture
+        }
+        val change = event.changes.firstOrNull { it.id == down.id } ?: break
         if (!change.pressed) {
             change.consume()
             if (dragging) {

@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Probe only (Phase 0 diagnostics). -->
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
     <!-- Cleartext HTTP to the LAN companion (only after its HMAC proof checks out). -->
     <application
         android:name=".OrbitApp"
@@ -16,7 +11,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Orbit">
 
-        <!-- Phase 1: the app icon opens the diary recorder. -->
+        <!-- The app icon opens the diary recorder. -->
         <activity-alias
             android:name=".Launcher"
             android:exported="true"
@@ -29,17 +24,5 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity-alias>
-
-        <!-- Diagnostics: adb shell am start -n com.orbit/.probe.ProbeActivity -->
-        <activity
-            android:name=".probe.ProbeActivity"
-            android:exported="true"
-            android:launchMode="singleTop" />
-
-        <service
-            android:name=".probe.ProbeRecordService"
-            android:exported="false"
-            android:foregroundServiceType="microphone"
-            android:process=":voice" />
     </application>
 </manifest>

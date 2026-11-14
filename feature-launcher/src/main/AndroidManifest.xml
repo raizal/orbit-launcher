@@ -38,7 +38,8 @@
             </intent-filter>
         </activity>
 
-        <!-- Notifications panel. Grant: adb shell cmd notification allow_listener com.orbit/com.orbit.launcher.notifs.NotifListener -->
+        <!-- Notifications panel. Grant: adb shell cmd notification allow_listener com.orbit/com.orbit.launcher.notifs.NotifListener
+             (the app self-kicks the bind; see NotifListener.ensureBound and docs/device-facts.md) -->
         <service
             android:name=".notifs.NotifListener"
             android:exported="true"

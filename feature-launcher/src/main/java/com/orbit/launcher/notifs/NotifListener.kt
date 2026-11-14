@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -142,9 +143,39 @@ class NotifListener : NotificationListenerService() {
             runCatching { instance?.cancelNotification(key) }.onFailure { Log.w(TAG, "cancel failed", it) }
         }
 
-        /** Ask the system to (re)bind us — after an app update the binding can be lost until reboot. */
-        fun rebind(context: Context) {
-            runCatching { requestRebind(ComponentName(context, NotifListener::class.java)) }
+        @Volatile private var lastKick = 0L
+
+        /** True if the user (or adb) granted notification access to this listener. */
+        fun isGranted(context: Context): Boolean {
+            val me = ComponentName(context, NotifListener::class.java)
+            val list = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners").orEmpty()
+            return list.split(':').any { ComponentName.unflattenFromString(it) == me }
+        }
+
+        /**
+         * Gets the system to bind us if access is granted but we are not connected.
+         *
+         * On this ROM the vendor launch gate (Sprd `BackgroundCleanHelper.judgeAppLaunchAllowed`)
+         * refuses to *start our process* for the system's bind, so every bind attempted while
+         * we are not running fails ("Unable to bind notification listener service", e.g. right
+         * after install or at boot), and the system does not retry. A bind made while our
+         * process is alive is allowed. `requestRebind` cannot help: on 8.1 it is a no-op unless
+         * the listener was snoozed. So we toggle the component off and on (without killing
+         * ourselves): the resulting PACKAGE_CHANGED makes the system rebind its listeners now,
+         * while we are running. See docs/device-facts.md.
+         */
+        fun ensureBound(context: Context) {
+            if (Notifs.connected.value || !isGranted(context)) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (lastKick != 0L && now - lastKick < 30_000) return
+            lastKick = now
+            val me = ComponentName(context, NotifListener::class.java)
+            val pm = context.packageManager
+            runCatching {
+                pm.setComponentEnabledSetting(me, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+                pm.setComponentEnabledSetting(me, PackageManager.COMPONENT_ENABLED_STATE_DEFAULT, PackageManager.DONT_KILL_APP)
+                Log.i(TAG, "listener not bound; toggled component to make the system rebind")
+            }.onFailure { Log.w(TAG, "rebind kick failed", it) }
         }
     }
 }

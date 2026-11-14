@@ -98,7 +98,7 @@ fun NotificationsScreen(nav: LauncherNav, env: LauncherEnv) {
     val accent = remember { accentOf(env) }
     val swipe = remember { Animatable(0f) }
 
-    LaunchedEffect(connected) { if (!connected) NotifListener.rebind(context) }
+    LaunchedEffect(connected) { if (!connected) withContext(Dispatchers.IO) { NotifListener.ensureBound(context) } }
     RotaryEffect { focus = (focus + it).coerceIn(0, last) }
 
     fun dismiss(item: NotifItem, direction: Float) {

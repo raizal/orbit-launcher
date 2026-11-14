@@ -103,6 +103,12 @@ class LauncherActivity : ComponentActivity(), LauncherNav {
         super.onStart()
         env.faces.start()
         lifecycleScope.launch { WeatherRepo.refresh(this@LauncherActivity) }
+        // The system's own bind fails while we are not running (vendor launch gate), e.g. after
+        // install or at boot; give a pending bind a moment, then make it bind us now.
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            delay(2_000)
+            com.orbit.launcher.notifs.NotifListener.ensureBound(this@LauncherActivity)
+        }
         facePoll = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             while (true) {
                 env.faces.pollForChanges()

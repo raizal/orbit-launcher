@@ -1,3 +1,4 @@
+import os
 import hashlib
 import hmac
 import json
@@ -356,3 +357,39 @@ def test_ui_serves_vault_audio_only_inside_vault(client, store, cfg, tmp_path):
     assert r.status_code == 200 and r.content == b"m4a" and r.headers["content-type"] == "audio/mp4"
     assert ui.get("/ui/api/vault/secret.md").status_code == 404  # not audio
     assert ui.get("/ui/api/vault/..%2Foutside.m4a").status_code == 404  # escapes the vault
+
+
+FAKE_CODEX = """#!/usr/bin/env python3
+import json, sys
+args = sys.argv[1:]
+prompt = sys.stdin.read()
+assert args[0] == "exec" and "--ephemeral" in args and args[args.index("-s") + 1] == "read-only"
+schema = json.load(open(args[args.index("--output-schema") + 1]))
+assert schema["required"] == ["diary", "summaries", "todos"]
+assert "[note 0] 07:02" in prompt and "buy rice" in prompt
+out = {"diary": "I went to the market.", "summaries": [{"note": 0, "summary": "Market plan"}], "todos": ["Buy rice"]}
+open(args[args.index("-o") + 1], "w").write(json.dumps(out))
+"""
+
+
+def test_diary_codex_provider(client, store, cfg, tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "codex"
+    fake.write_text(FAKE_CODEX)
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    cfg.llm_provider = "codex"
+    add_note(client, store, "2026-11-13T07:02:10+07:00", "I need to buy rice at the market")
+    text = diary.build(cfg, store, date(2026, 11, 13)).read_text()
+    assert "I went to the market." in text
+    assert "— Market plan" in text
+    assert "## To-dos\n\n- [ ] Buy rice" in text
+
+
+def test_diary_codex_missing_cli(client, store, cfg, monkeypatch):
+    monkeypatch.setenv("PATH", "/nonexistent")
+    cfg.llm_provider = "codex"
+    add_note(client, store, "2026-11-13T07:02:10+07:00", "hello")
+    with pytest.raises(RuntimeError, match="codex CLI not found"):
+        diary.build(cfg, store, date(2026, 11, 13))

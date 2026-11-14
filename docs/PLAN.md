@@ -46,6 +46,6 @@ Spec: `docs/launcher.md`. Order: face renderer (JSON → Compose Canvas) → swi
 2. ~~Diary language~~ — **decided: English.**
 3. ~~Vault~~ — **decided: `~/vault`, folder `Diary`** (audio copied to `Diary/audio/` as `.m4a`).
 4. ~~Transcription~~ — **decided: local faster-whisper `small`** (~5× real time on the PC).
-5. **Diary LLM:** none for now (page = notes + transcripts). Switch with `llm_provider = "anthropic"` + `ANTHROPIC_API_KEY`.
+5. ~~Diary LLM~~ — **decided: Codex CLI headless** (`llm_provider = "codex"`, uses the `codex` login; ~8–10 s per page). Also extracts to-dos.
 6. **Rotary diary side panel:** does turning the rotary on the face only open the panel, or open it *and* start recording (one-press rule)? Needed before Phase 3.
 7. **Long-press BACK:** free — assign something (e.g. start recording from any Orbit screen)? Optional.

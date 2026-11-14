@@ -24,8 +24,9 @@ host = "0.0.0.0"
 diary_folder = "Diary"
 whisper_model = "small"                  # tiny / base / small / medium / large-v3
 diary_language = "auto"                  # "auto" = same language as the notes, or e.g. "English"
-llm_provider = "none"                    # "none" or "anthropic" (key from ANTHROPIC_API_KEY)
-llm_model = "claude-sonnet-5-5"
+llm_provider = "none"                    # "none", "codex" (your `codex` CLI login) or "anthropic" (ANTHROPIC_API_KEY)
+llm_model = "claude-sonnet-5-5"          # for "anthropic"
+codex_model = ""                         # for "codex"; empty = Codex default
 """
 
 
@@ -44,6 +45,8 @@ class Config:
     whisper_compute_type: str = "int8"
     diary_language: str = "auto"
     llm_provider: str = "none"
+    codex_model: str = ""
+    codex_timeout_s: int = 300
     llm_model: str = "claude-sonnet-5-5"
 
     @property
@@ -89,7 +92,7 @@ def load(explicit: Path | None = None, *, create: bool = True) -> Config:
         value = os.environ.get(f"ORBIT_{f.name.upper()}", raw.get(f.name))
         if value is None or value == "":
             continue
-        if f.name == "port":
+        if f.name in ("port", "codex_timeout_s"):
             value = int(value)
         elif f.name in ("data_dir", "vault_dir"):
             p = Path(str(value)).expanduser()

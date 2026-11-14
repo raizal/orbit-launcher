@@ -6,7 +6,8 @@ import json
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class Entry:
 class Generated:
     diary: str
     summaries: list[str]  # one per entry, same order
+    todos: list[str] = field(default_factory=list)  # things the owner said they need to do
 
 
 def collect(store: Store, day: date) -> list[Entry]:
@@ -65,12 +67,31 @@ Rules:
 - Write in the first person, as the owner, in plain prose (a few short paragraphs, no headings).
 - Transcripts come from speech recognition and may contain errors; do not guess wildly at garbled words.
 - {language}
-Also give a one-line summary (max ~12 words) for each note, in the same language as the diary."""
+Also give a one-line summary (max ~12 words) for each note, in the same language as the diary,
+and list the concrete to-dos the owner says they need or plan to do (empty list if none; never invent any)."""
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "diary": {"type": "string"},
+        "summaries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"note": {"type": "integer"}, "summary": {"type": "string"}},
+                "required": ["note", "summary"],
+                "additionalProperties": False,
+            },
+        },
+        "todos": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["diary", "summaries", "todos"],
+    "additionalProperties": False,
+}
 
 
-def generate_anthropic(cfg: Config, day: date, entries: list[Entry]) -> Generated:
-    import anthropic  # optional at runtime: only needed for this provider
-
+def prompt_parts(cfg: Config, day: date, entries: list[Entry]) -> tuple[str, str]:
+    """(system prompt, user message) shared by every LLM provider."""
     language = (
         "Write in the language the notes are mostly spoken in."
         if cfg.diary_language.lower() == "auto"
@@ -79,23 +100,22 @@ def generate_anthropic(cfg: Config, day: date, entries: list[Entry]) -> Generate
     notes = "\n\n".join(
         f"[note {i}] {e.note.started:%H:%M}\n{e.transcript or transcript_label(e.transcript)}" for i, e in enumerate(entries)
     )
-    schema = {
-        "type": "object",
-        "properties": {
-            "diary": {"type": "string"},
-            "summaries": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {"note": {"type": "integer"}, "summary": {"type": "string"}},
-                    "required": ["note", "summary"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": ["diary", "summaries"],
-        "additionalProperties": False,
-    }
+    return SYSTEM_PROMPT.format(language=language), f"Voice notes from {day:%A, %d %B %Y}, in time order:\n\n{notes}"
+
+
+def from_json(data: dict, entries: list[Entry]) -> Generated:
+    by_note = {s["note"]: s["summary"].strip() for s in data.get("summaries", [])}
+    return Generated(
+        data["diary"].strip(),
+        [by_note.get(i) or first_words(e.transcript) for i, e in enumerate(entries)],
+        [t.strip() for t in data.get("todos", []) if t.strip()],
+    )
+
+
+def generate_anthropic(cfg: Config, day: date, entries: list[Entry]) -> Generated:
+    import anthropic  # optional at runtime: only needed for this provider
+
+    system, user = prompt_parts(cfg, day, entries)
     extra = {}
     if cfg.llm_model in FALLBACK_MODELS:  # on a safety refusal, the API re-runs the request on a fallback model
         extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
@@ -103,19 +123,43 @@ def generate_anthropic(cfg: Config, day: date, entries: list[Entry]) -> Generate
     response = client.beta.messages.create(
         model=cfg.llm_model,
         max_tokens=16000,
-        system=SYSTEM_PROMPT.format(language=language),
-        messages=[{"role": "user", "content": f"Voice notes from {day:%A, %d %B %Y}, in time order:\n\n{notes}"}],
-        output_config={"format": {"type": "json_schema", "schema": schema}},
+        system=system,
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
         **extra,
     )
     if response.stop_reason == "refusal":
         raise RuntimeError("the model declined to write this diary page")
-    data = json.loads(next(b.text for b in response.content if b.type == "text"))
-    by_note = {s["note"]: s["summary"].strip() for s in data["summaries"]}
-    return Generated(data["diary"].strip(), [by_note.get(i) or first_words(e.transcript) for i, e in enumerate(entries)])
+    return from_json(json.loads(next(b.text for b in response.content if b.type == "text")), entries)
 
 
-PROVIDERS = {"none": generate_none, "anthropic": generate_anthropic}
+def generate_codex(cfg: Config, day: date, entries: list[Entry]) -> Generated:
+    """
+    Codex CLI in headless mode (`codex exec`), using your Codex login — no API key here.
+    Runs in an empty temp dir with a read-only sandbox and no session history; the
+    answer is forced into SCHEMA with --output-schema and read from -o.
+    """
+    exe = shutil.which("codex")
+    if not exe:
+        raise RuntimeError("codex CLI not found on PATH (install it or set llm_provider)")
+    system, user = prompt_parts(cfg, day, entries)
+    with tempfile.TemporaryDirectory(prefix="orbit-diary-") as tmp:
+        schema = Path(tmp) / "schema.json"
+        out = Path(tmp) / "out.json"
+        schema.write_text(json.dumps(SCHEMA))
+        cmd = [exe, "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-C", tmp,
+               "--color", "never", "--output-schema", str(schema), "-o", str(out)]
+        if cfg.codex_model:
+            cmd += ["-m", cfg.codex_model]
+        prompt = f"{system}\n\nReply only with the JSON object. Do not run commands or read files.\n\n{user}"
+        r = subprocess.run(cmd + ["-"], input=prompt, capture_output=True, text=True, timeout=cfg.codex_timeout_s)
+        if r.returncode != 0 or not out.exists():
+            tail = (r.stderr or r.stdout).strip().splitlines()[-5:]
+            raise RuntimeError(f"codex exec failed ({r.returncode}): " + " | ".join(tail))
+        return from_json(json.loads(out.read_text()), entries)
+
+
+PROVIDERS = {"none": generate_none, "anthropic": generate_anthropic, "codex": generate_codex}
 
 
 # --- rendering -----------------------------------------------------------------------------------
@@ -169,6 +213,8 @@ def render_block(day: date, entries: list[Entry], gen: Generated, cfg: Config) -
         lines.append(f"- {t:%H:%M} · {fmt_duration(e.note.duration_ms)} — {audio_link(e.audio, cfg)} — {summary}")
     if not entries:
         lines.append("- (no notes this day)")
+    if gen.todos:
+        lines += ["", "## To-dos", ""] + [f"- [ ] {t}" for t in gen.todos]
     lines += ["", "## Transcripts", ""]
     for e in entries:
         lines.append(f"> [!quote]- {e.note.started:%H:%M} · {e.note.stem}")

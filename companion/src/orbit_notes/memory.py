@@ -56,6 +56,7 @@ class E5Embedder:
         self.dim = self.spec["dim"]
         self._session = self._tok = None
         self._lock = threading.Lock()
+        self.last_used = 0.0
 
     def load(self) -> None:
         with self._lock:
@@ -79,10 +80,30 @@ class E5Embedder:
             self._tok = tok
             print(f"memory: embedding model {self.name} loaded in {time.monotonic() - t:.1f}s ({model})")
 
+    def unload_if_idle(self, idle_s: float = 900) -> bool:
+        """Drop the model (~0.5 GB resident, mostly the 250k-word tokenizer) after `idle_s` without use; the next
+        embed reloads it in ~2 s (a talk note warms it while whisper runs)."""
+        with self._lock:
+            if self._session is None or time.monotonic() - self.last_used < idle_s:
+                return False
+            self._session = self._tok = None
+        import gc
+
+        gc.collect()
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)  # glibc: hand the freed arenas back to the OS
+        except (OSError, AttributeError):
+            pass
+        print(f"memory: embedding model unloaded after {idle_s / 60:.0f} min idle")
+        return True
+
     def embed(self, texts: list[str], kind: str = "passage"):
         """Unit vectors (float32, one row per text). kind: "query" or "passage" (e5's prefixes)."""
         import numpy as np
 
+        self.last_used = time.monotonic()
         self.load()
         out = np.zeros((len(texts), self.dim), dtype=np.float32)
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))  # similar lengths -> less padding
@@ -260,7 +281,7 @@ def parse_range(text: str, today: date) -> tuple[date, date] | None:
 
 
 RECALL_RE = re.compile(
-    r"\b(remember|recall|remind me|did i (say|mention|tell|talk|write|record)|what did i|when did i|"
+    r"\b(remember(?! (that|to|this)\b)|recall|remind me|did i (say|mention|tell|talk|write|record)|what did i|when did i|"
     r"have i (ever )?(said|mentioned|talked|told)|last time i|what was i|ingat|inget|pernah|kapan (aku|saya|gue|gw)|"
     r"(aku|saya|gue|gw) (bilang|ngomong|cerita) apa|apa yang (aku|saya|gue) (bilang|katakan|omongin|ceritain))\b",
     re.I)
@@ -455,6 +476,8 @@ class Memory:
                 job, arg = self._queue.get(timeout=300)
             except queue.Empty:
                 job, arg = "embed", None
+                if self.embedder and hasattr(self.embedder, "unload_if_idle"):
+                    self.embedder.unload_if_idle()
             if job == "stop":
                 return
             if job == "sync":
@@ -962,14 +985,16 @@ class Memory:
                 db.execute("DELETE FROM tags WHERE note_id = ? AND via = ?", (nid, via))
             db.executemany("INSERT OR IGNORE INTO tags VALUES (?, ?, ?, ?, ?)", rows)
 
-    def day_links(self, day: date) -> list[str]:
-        """Tag names mentioned on a day (forgotten terms left out), for `[[Topic]]` links on the diary page."""
+    def day_links(self, day: date, limit: int = 12) -> list[str]:
+        """Tag names of a day for `[[Topic]]` links on the diary page: people, places, projects, then topics, the
+        most mentioned first, at most `limit`; forgotten terms left out."""
         with closing(self._db()) as db:
             names = [r["name"] for r in db.execute(
-                "SELECT name, MIN(rowid) r FROM tags WHERE local_date = ? GROUP BY name COLLATE NOCASE ORDER BY r",
-                (day.isoformat(),))]
+                "SELECT name, MIN(CASE kind WHEN 'person' THEN 0 WHEN 'place' THEN 1 WHEN 'project' THEN 2 ELSE 3 END) k,"
+                " COUNT(DISTINCT note_id) n, MIN(rowid) r FROM tags WHERE local_date = ? GROUP BY name COLLATE NOCASE"
+                " ORDER BY k, n DESC, r", (day.isoformat(),))]
             forgotten = self._forgotten_res(db)
-        return [n for n in names if not any(p.search(normalize(n)) for p in forgotten)]
+        return [n for n in names if not any(p.search(normalize(n)) for p in forgotten)][:limit]
 
     def notes_tagged(self, name: str) -> set[str]:
         with closing(self._db()) as db:
@@ -1114,12 +1139,11 @@ class Memory:
             return params, f"{summary} (marking “{f.text}” as no longer true)"
         if kind == "memory_forget":
             facts, n = self.forget_preview(params["query"])
-            what = []
+            what = f"retires {len(facts)} fact{'s' if len(facts) != 1 else ''}"
             if facts:
-                what.append(f"{len(facts)} fact{'s' if len(facts) != 1 else ''}: " +
-                            "; ".join(f"“{clip(f.text, 80)}”" for f in facts[:3]))
-            what.append(f"{n} note excerpt{'s' if n != 1 else ''} hidden from recall")
-            return params, f"{summary} (forgets {', and '.join(what)}; the recordings themselves stay)"
+                what += " (" + "; ".join(f"“{clip(f.text, 80)}”" for f in facts[:3]) + ")"
+            what += f" and hides {n} note excerpt{'s' if n != 1 else ''} from recall"
+            return params, f"{summary} ({what}; the recordings themselves stay)"
         raise Invalid(f"{kind!r} is not a memory action")
 
     def execute(self, kind: str, params: dict, note_id: str | None) -> str:
@@ -1313,6 +1337,10 @@ def extend_diary_schema(schema: dict) -> dict:
     return schema
 
 
+TAG_RULE = """the named people, pets, places and projects the note is really about, plus at most 2 broad
+  topics (1 to 2 words, e.g. "running", "Orbit"); names as he says them, in Title Case; no phrases ("my sister":
+  leave out unless named), nothing he only asks you about; empty list if none."""
+
 FACT_RULE = """durable facts about him that are clearly stated (people and pets in his life, places,
   preferences, goals, decisions, routines) — not passing moods, one-off events or project/workspace status (his
   notes are kept anyway). One short English sentence each, third person ("His cat is called Mochi."), a topic
@@ -1328,18 +1356,17 @@ RECALL_RULES = """- Memory. The MEMORY section is what the companion retrieved f
   YYYY-MM-DD or ""); his notes mix Indonesian and English, so a second search in the other language can help."""
 
 FACT_RULES = f"""- Facts and tags, private bookkeeping: in EVERY answer fill memory.facts with {FACT_RULE}
-  memory.tags: the people, places, projects and topics this note mentions. Never mention this bookkeeping. When
+  memory.tags: {TAG_RULE} Never mention this bookkeeping. When
   he says "remember that …", record it as a fact and simply say you will remember it.
 - Memory changes (confirm first, like any action): "that's wrong / actually it's …" about a known fact ->
   memory_fact op "correct" with its id and the corrected sentence; "that's no longer true" -> op "retire";
   "forget X" -> memory_forget with the word or phrase. Forgetting retires matching facts and hides matching notes
   from recall; the recordings themselves are never deleted."""
 
-PARAMS_HELP = """- memory_fact: {"op": "correct|retire", "fact_id": "f-...", "text": "<the corrected fact, one sentence; only for correct>"}
+PARAMS_HELP = """- memory_fact: {"op": "correct|retire", "fact_id": "f-...", "text": "<the corrected fact, one sentence; only for correct>", "topic": "<only if the correction renames the topic, e.g. the new name>"}
 - memory_forget: {"query": "<word or phrase he wants forgotten>"}"""
 
 DIARY_RULE = f"""Also list, in "facts", {FACT_RULE}
-Give each fact the index of the note it comes from ("note"). For each note, list in "tags" the people, places,
-projects and topics it mentions (names as spoken; empty list if none).
+Give each fact the index of the note it comes from ("note"). For each note, "tags": {TAG_RULE}
 Known facts (id: fact [topic]):
 {{known}}"""

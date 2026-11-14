@@ -316,7 +316,7 @@ def test_forget_by_voice_retires_facts_and_hides_notes(talk, codex, client, cfg,
                  remembered("Okay.", confirmation="confirm"))
     reply, _ = talk("Please forget everything about Rina.")
     from orbit_notes.actions import ActionLog
-    assert "(forgets 1 fact: “Rina is his former colleague.”, and 1 note excerpt hidden from recall; the recordings " \
+    assert "(retires 1 fact (“Rina is his former colleague.”) and hides 1 note excerpt from recall; the recordings " \
            "themselves stay)" in ActionLog(cfg.data_dir).pending().summary
     reply, _ = talk("Yes, do it.")
     assert "Done: I forgot “Rina”: 1 fact retired and 1 note excerpt hidden from recall." in reply
@@ -402,3 +402,33 @@ def test_turn_schema_has_memory_and_new_kinds():
     assert {"memory_fact", "memory_forget"} <= set(OUTPUT_SCHEMA["properties"]["proposed_action"]["properties"]
                                                    ["kind"]["enum"])
     assert '- memory_forget: {"query"' in PARAMS_HELP and "memory_fact and memory_forget" in RULES
+
+
+@pytest.mark.parametrize("text, recall", [
+    ("What did I say about the migration?", True),
+    ("Do you remember my sister's wedding?", True),
+    ("Apa yang aku bilang soal kucing kemarin?", True),
+    ("Kapan aku pernah ke Bandung?", True),
+    ("Remember that my cat is called Mochi.", False),
+    ("Remember to buy rice.", False),
+    ("I had lunch with Dewi.", False),
+])
+def test_recall_question_detection(text, recall):
+    assert memory.is_recall_question(text) is recall
+
+
+def test_day_links_prefer_people_and_are_capped(client, store, mem):
+    for i, at in enumerate(("07:00", "08:00")):
+        n = add_note(client, store, f"2026-11-13T{at}:00+07:00", "x")
+        tags = [{"kind": "topic", "name": f"topic {i}{j}"} for j in range(8)] + \
+            [{"kind": "place", "name": "Bandung"}] * i + [{"kind": "person", "name": "Dewi"}]
+        mem.set_tags(tags, {None: n}, "talk")
+    links = mem.day_links(date(2026, 11, 13))
+    assert links[:2] == ["Dewi", "Bandung"] and len(links) == 12
+
+
+def test_embedder_unloads_when_idle():
+    e = memory.E5Embedder()
+    e._session, e._tok, e.last_used = object(), object(), 0.0
+    assert e.unload_if_idle(900) and e._session is None
+    assert not e.unload_if_idle(900)

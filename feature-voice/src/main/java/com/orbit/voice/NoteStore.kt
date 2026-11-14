@@ -92,9 +92,11 @@ class NoteStore(private val context: Context) {
         }
     }
 
-    /** Notes not yet uploaded. Until the upload queue exists (1b/1c) that is every note. */
-    fun waitingCount(): Int =
-        dir.listFiles { f -> f.name.endsWith(AUDIO_EXT) || f.name.endsWith(TEMP_SUFFIX) }?.size ?: 0
+    fun meta(stem: String): NoteMeta? =
+        runCatching { JSON.decodeFromString(NoteMeta.serializer(), File(dir, "$stem.json").readText()) }.getOrNull()
+
+    /** Unfinished temp files (counted as waiting by the UI). */
+    fun tempCount(): Int = dir.listFiles { f -> f.name.endsWith(TEMP_SUFFIX) }?.size ?: 0
 
     private fun durationOf(file: File): Long =
         runCatching {
@@ -136,6 +138,6 @@ class NoteStore(private val context: Context) {
         const val TEMP_SUFFIX = ".rec"
         const val BITRATE = 32_000
         private const val TAG = "OrbitVoice"
-        private val JSON = Json { prettyPrint = true }
+        private val JSON = Json { prettyPrint = true; ignoreUnknownKeys = true }
     }
 }

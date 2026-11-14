@@ -59,12 +59,13 @@ fun RecorderScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onNewNote: () -> Unit,
+    onInbox: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         LevelRing(levels, recording = state is RecorderUi.Recording)
         when (state) {
-            is RecorderUi.Idle -> Idle(waiting, null, onStart)
-            is RecorderUi.Error -> Idle(waiting, state.message, onStart)
+            is RecorderUi.Idle -> Idle(waiting, null, onStart, onInbox)
+            is RecorderUi.Error -> Idle(waiting, state.message, onStart, onInbox)
             is RecorderUi.Recording -> Recording(state, onStop)
             is RecorderUi.Saved -> Saved(state, onNewNote)
         }
@@ -95,7 +96,7 @@ private fun LevelRing(levels: FloatArray, recording: Boolean) {
 }
 
 @Composable
-private fun Idle(waiting: Int, error: String?, onStart: () -> Unit) {
+private fun Idle(waiting: Int, error: String?, onStart: () -> Unit, onInbox: () -> Unit) {
     var clock by remember { mutableStateOf(clockNow()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -126,6 +127,8 @@ private fun Idle(waiting: Int, error: String?, onStart: () -> Unit) {
     } else {
         CenterText(waitingText(waiting), top = 296.dp, size = 13, color = OrbitColors.Muted)
     }
+    // "N notes waiting" opens the inbox; a 64 px-tall target around the small text.
+    Box(Modifier.offset(100.dp, 284.dp).size(200.dp, 64.dp).clickable(onClick = onInbox))
 }
 
 @Composable

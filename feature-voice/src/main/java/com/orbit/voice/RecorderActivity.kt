@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.orbit.core.RoundScreen
+import com.orbit.voice.upload.Queue
 
 /**
  * Recorder screen. Opened by the app icon, or by `com.orbit.action.RECORD`
@@ -49,7 +50,7 @@ class RecorderActivity : ComponentActivity() {
                 lastTick = SystemClock.elapsedRealtime()
                 pushLevel(state.level)
             }
-            if (state is RecorderUi.Saved || state is RecorderUi.Error) waiting = store.waitingCount()
+            if (state is RecorderUi.Saved || state is RecorderUi.Error) waiting = waitingCount()
             ui = state
         }
     }
@@ -70,6 +71,7 @@ class RecorderActivity : ComponentActivity() {
                     onStart = ::record,
                     onStop = { VoiceEntry.stopRecording(this) },
                     onNewNote = { ui = RecorderUi.Idle },
+                    onInbox = { startActivity(Intent(this, InboxActivity::class.java)) },
                 )
             }
         }
@@ -99,7 +101,7 @@ class RecorderActivity : ComponentActivity() {
             else -> current
         }
         if (marker == null) store.recoverOrphans(minIdleMs = 10_000)
-        waiting = store.waitingCount()
+        waiting = waitingCount()
     }
 
     override fun onStop() {
@@ -129,6 +131,8 @@ class RecorderActivity : ComponentActivity() {
         if (!granted) ui = RecorderUi.Error("Microphone permission needed")
         startWhenPermitted = false
     }
+
+    private fun waitingCount() = Queue(this).unsent().size + store.tempCount()
 
     /** Newest level at index 0 (12 o'clock); older ones move clockwise. */
     private fun pushLevel(level: Float) {

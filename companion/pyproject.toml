@@ -1,0 +1,33 @@
+[project]
+name = "orbit-notes"
+version = "0.1.0"
+description = "Orbit Notes: companion server for the Orbit watch voice diary"
+readme = "README.md"
+authors = [
+    { name = "Raizal I.N. Pregnanta", email = "raizal.pregnanta@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=2.8.0",
+    "fastapi>=0.162.7",
+    "faster-whisper>=1.2.1",
+    "ifaddr>=0.2.0",
+    "python-multipart>=0.0.33",
+    "qrcode[pil]>=8.2",
+    "typer>=0.29.1",
+    "uvicorn>=0.54.0",
+    "zeroconf>=0.154.0",
+]
+
+[project.scripts]
+orbit-notes = "orbit_notes:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+]

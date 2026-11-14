@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
+import com.orbit.voice.upload.NoteSavedReceiver
 import java.io.File
 import kotlin.math.log10
 
@@ -46,6 +47,7 @@ class RecorderService : Service() {
         // A fresh service instance means nothing is recording: safe to finalize leftovers.
         RecorderState.clearMarker(this)
         store.recoverOrphans()
+        NoteSavedReceiver.notify(this)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -111,7 +113,10 @@ class RecorderService : Service() {
         val file = temp!!
         if (stopped) {
             runCatching { store.finalize(file, startedAtMs, durationMs) }
-                .onSuccess { broadcast(RecorderState.saved(it.name, durationMs)) }
+                .onSuccess {
+                    broadcast(RecorderState.saved(it.name, durationMs))
+                    NoteSavedReceiver.notify(this)
+                }
                 .onFailure {
                     Log.e(TAG, "finalize failed; temp file kept", it)
                     broadcast(RecorderState.error("Saved for recovery"))

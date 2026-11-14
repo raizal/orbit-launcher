@@ -20,4 +20,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.work)
+    implementation(libs.okhttp)
+    implementation(libs.zxing.embedded)
+    implementation(libs.zxing.core)
+    testImplementation(libs.junit)
 }

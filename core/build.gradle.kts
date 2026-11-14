@@ -17,4 +17,5 @@ android {
 dependencies {
     api(platform(libs.compose.bom))
     api(libs.compose.foundation)
+    implementation(libs.androidx.core.ktx)
 }

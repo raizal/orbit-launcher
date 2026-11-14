@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+.pytest_cache/
+# contains the pairing token
+config.toml
+data/

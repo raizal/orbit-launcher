@@ -70,6 +70,7 @@ class LauncherActivity : ComponentActivity(), LauncherNav {
         // am start -n com.orbit/com.orbit.launcher.LauncherActivity --ez overLock true
         val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
         if (debuggable && intent.getBooleanExtra("overLock", false)) setShowWhenLocked(true)
+        com.orbit.launcher.apps.AppCache.warm(this) // first BACK into the grid already has icons
         env = LauncherEnv(FaceRepo(this), LauncherPrefs(this), data)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = back()

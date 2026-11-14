@@ -146,6 +146,11 @@ object AppUpdates {
         val apk = apkFile(app, info)
         if (!UpdateLogic.verify(apk, info)) {
             dir.listFiles()?.forEach { it.delete() } // older downloads / partial files
+            // An older offer's file is gone now: withdraw it until this one is verified.
+            if (_ready.value != null) {
+                UpdatePrefs(app).ready = null
+                _ready.value = null
+            }
             Log.i(TAG, "downloading ${info.version_name} (${info.size} bytes)")
             try {
                 client.download(ip, pairing.port, pairing.token, info.apk, apk)

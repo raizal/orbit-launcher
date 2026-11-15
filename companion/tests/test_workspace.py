@@ -197,8 +197,8 @@ def test_index_is_compact_timestamped_and_cached(bb):
     idx = ws.index()
     text = idx.text
     assert text.startswith("BB WORKSPACE SNAPSHOT taken ")
-    assert "- proj_orbit orbit-launcher — " in text
-    assert 'thr_notif00001 [orbit-launcher] "Fix notification sound" — idle, updated 3 h ago' in text
+    assert "- [personal] proj_orbit orbit-launcher — " in text
+    assert '- [personal] thr_notif00001 (project orbit-launcher) "Fix notification sound" — idle, updated 3 h ago' in text
     assert "waiting for the owner's input" in text  # the Talk thread has a pending interaction
     assert "Archived thing" not in text
     assert "status 'idle' only means no agent is running now" in text

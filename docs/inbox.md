@@ -17,7 +17,7 @@ sync/worker/notifications, `InboxListActivity.kt` screen).
   "kind": "note" | "thread_done" | "thread_input" | "thread_error" | "app_update" | …,
   "title": "Cancel Talk and voice-note recordings is done",   # ≤ 80 chars, spoken-friendly
   "body": "Cancel is in place in both screens. Unit tests pass.",   # a sentence or two (≤ 2000)
-  "ref": "thr_jq23t7qzba" | null,         # e.g. the BB thread
+  "ref": "thr_jq23t7qzba" | null,         # e.g. the BB thread ("work:thr_…" for a thread in another BB workspace)
   "read_at": null | "2026-11-15T09:20:01+00:00" }
 ```
 
@@ -101,7 +101,7 @@ Completions from before the producer's first run are recorded silently (no backl
 ## Talk (companion)
 
 For each talk turn (`Talker.inbox_context`, prompt section just before the voice note):
-- sidecar `about` → the item's title/body and, for a thread item, `bb thread output <ref>` (≤ 4000
+- sidecar `about` → the item's title/body and, for a thread item, `bb thread output <ref>` in the ref's workspace (≤ 4000
   chars) as evidence, so "tell me more" works;
 - unread items not mentioned yet (last 24 h, at most 3) → Codex may mention them briefly once at the
   end of the reply ("by the way, …"). After the turn they (and the `about` item) are marked

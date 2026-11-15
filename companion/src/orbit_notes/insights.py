@@ -147,6 +147,8 @@ def briefing_evidence(cfg, store: Store, note: Note, idx) -> str:
         out.append("BB tasks and threads: NOT AVAILABLE (the workspace could not be read) — say so briefly.")
     else:
         out += bb_briefing(idx, now, today)
+        for name, why in (getattr(idx, "unavailable", None) or {}).items():
+            out.append(f"BB tasks and threads of the [{name}] workspace: NOT AVAILABLE ({why}) — say so briefly.")
 
     earlier = [n for n in store.notes_on(today) if n.started < note.started]
     out.append("His notes so far today:")
@@ -155,9 +157,12 @@ def briefing_evidence(cfg, store: Store, note: Note, idx) -> str:
 
 
 def bb_briefing(idx, now: datetime, today: date) -> list[str]:
+    from .actions import AllRefs
     from .workspace import ago, parse_time
 
-    names = {pid: p["name"] for pid, p in idx.refs.projects.items()}
+    allrefs = AllRefs.of(idx.refs)
+    names = {(ws, pid): p["name"] for ws, r in allrefs.workspaces.items() for pid, p in r.projects.items()}
+    default_ws = allrefs.names[0] if allrefs.names else "personal"
     out = []
     soon = today + timedelta(days=1)
     tasks = []
@@ -180,7 +185,8 @@ def bb_briefing(idx, now: datetime, today: date) -> list[str]:
             tasks.append((0 if due and due <= today else 1, t, why))
     tasks.sort(key=lambda x: (x[0], x[1].get("dueDate") or "9999"))
     out.append("BB tasks due (overdue, today, tomorrow) or in progress:")
-    out += [f"- {t['key']} \"{(t.get('title') or '').strip()}\" — {', '.join(why)}, priority {t.get('priority')}"
+    out += [f"- [{t.get('_ws') or default_ws}] {t['key']} \"{(t.get('title') or '').strip()}\" — {', '.join(why)}, "
+            f"priority {t.get('priority')}"
             for _, t, why in tasks[:12]] or ["- (none)"]
 
     since = datetime.combine(today - timedelta(days=1), EVENING).astimezone()
@@ -190,14 +196,15 @@ def bb_briefing(idx, now: datetime, today: date) -> list[str]:
         if not updated or updated < since:
             continue
         title = (t.get("title") or t.get("titleFallback") or "(untitled)").replace("\n", " ")
-        where = names.get(t.get("projectId"), t.get("projectId"))
+        ws = t.get("_ws") or default_ws
+        where = names.get((ws, t.get("projectId")), t.get("projectId"))
         if t.get("hasPendingInteraction"):
             state = "WAITING FOR HIS INPUT"
         elif t.get("status") == "idle":
             state = "stopped (agent finished a run; outcome not checked)"
         else:
             state = f"{t.get('status')} (still running)"
-        rows.append((0 if t.get("hasPendingInteraction") else 1, f"- {t['id']} \"{title}\" [{where}] — {state}, "
+        rows.append((0 if t.get("hasPendingInteraction") else 1, f"- [{ws}] {t['id']} \"{title}\" (project {where}) — {state}, "
                                                                   f"updated {ago(updated, now)}"))
     rows.sort(key=lambda r: r[0])
     out.append(f"BB threads updated since yesterday {EVENING:%H:%M} (waiting for input first):")

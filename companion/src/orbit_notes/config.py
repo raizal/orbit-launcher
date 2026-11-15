@@ -7,7 +7,7 @@ import re
 import secrets
 import socket
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 LOCAL_CONFIG = Path("config.toml")
@@ -33,7 +33,13 @@ tts_voice = "en_US-lessac-medium"        # Piper voice, downloaded once into <da
 talk_timeout_s = 120
 orbit_project = "proj_puvrp7a3i8"          # BB project of Orbit itself
 orbit_orchestrator_thread = "thr_834czrmc82"  # threads spawned in orbit_project become its children ("" = off)
-talk_workspace = "bb"                    # "bb": Talk can read your BB workspace and propose actions (confirmed by voice); "none"
+talk_workspace = "bb"                    # "bb": Talk can read your BB workspaces and propose actions (confirmed by voice); "none"
+# talk_workspaces = ["personal", "work"]  # restrict to these; default: every ~/.bb (personal) / ~/.bb-<name> bb data dir
+# orbit_workspace = "personal"            # the workspace orbit_project lives in
+# [[workspaces]]                          # instead of discovery (put at the END of this file: TOML tables come last)
+# name = "work"
+# data_dir = "~/.bb-work"
+# server_url = "http://127.0.0.1:39886"  # optional; default: read from <data_dir>/bb-app-runtime.json every call
 # Memory & recall (docs/memory.md): local multilingual embeddings, downloaded once into ~/.cache/huggingface
 memory_embedder = "multilingual-e5-small"  # or "none" (keyword search only)
 # memory_page = "~/Obsidian/MyVault/Orbit/Memory.md"   # unset -> <diary folder>/../Orbit/Memory.md
@@ -62,6 +68,9 @@ class Config:
     tts_voice: str = "en_US-lessac-medium"
     talk_timeout_s: int = 120
     talk_workspace: str = "bb"
+    talk_workspaces: list[str] = field(default_factory=list)  # empty = all discovered (docs/talk.md)
+    workspaces: list[dict] = field(default_factory=list)  # [[workspaces]] name / data_dir / server_url
+    orbit_workspace: str = "personal"
     orbit_project: str = "proj_puvrp7a3i8"
     orbit_orchestrator_thread: str = "thr_834czrmc82"
     memory_embedder: str = "multilingual-e5-small"
@@ -108,9 +117,15 @@ def load(explicit: Path | None = None, *, create: bool = True) -> Config:
         if f.name == "path":
             continue
         value = os.environ.get(f"ORBIT_{f.name.upper()}", raw.get(f.name))
+        if f.name == "workspaces":  # tables: config file only
+            value = raw.get(f.name)
+            if not isinstance(value, list):
+                continue
         if value is None or value == "":
             continue
-        if f.name in ("port", "codex_timeout_s", "talk_timeout_s"):
+        if f.name == "talk_workspaces":
+            value = [str(x).strip() for x in (value.split(",") if isinstance(value, str) else value) if str(x).strip()]
+        elif f.name in ("port", "codex_timeout_s", "talk_timeout_s"):
             value = int(value)
         elif f.name in ("data_dir", "vault_dir", "memory_page"):
             p = Path(str(value)).expanduser()

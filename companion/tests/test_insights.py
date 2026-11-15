@@ -97,8 +97,8 @@ def test_briefing_on_request_gets_evidence_in_the_first_call(talk, codex, bb, br
     assert "- Call the bank about the card" in ev and "Buy rice" not in ev  # ticked in Obsidian = done
     assert 'ORB-7 "Release build" — due today' in ev and 'ORB-1 "Pair over QR" — in progress' in ev
     assert "ORB-2" not in ev  # done
-    assert '"Talk mode" [orbit-launcher] — WAITING FOR HIS INPUT' in ev
-    assert '"Fix notification sound" [orbit-launcher] — stopped' in ev
+    assert '[personal] thr_talk000001 "Talk mode" (project orbit-launcher) — WAITING FOR HIS INPUT' in ev
+    assert '"Fix notification sound" (project orbit-launcher) — stopped' in ev
     assert "Remember the dentist at four" in ev
     assert "Morning briefing: ONLY when he asks" in p and "the companion has no location — if he asks, say so" in p
     assert not writes(bb())

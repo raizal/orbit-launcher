@@ -32,3 +32,14 @@ class FakeEmbedder:
 @pytest.fixture(autouse=True)
 def fake_embedder(monkeypatch):
     monkeypatch.setattr(memory, "make_embedder", lambda cfg: FakeEmbedder())
+
+
+@pytest.fixture(autouse=True)
+def no_real_bb_workspaces(tmp_path, monkeypatch):
+    """Workspace discovery never sees the real ~/.bb* data dirs: nothing discovered → one default workspace."""
+    from orbit_notes import workspace
+
+    home = tmp_path / "bb-home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(workspace, "HOME", home)
+    return home

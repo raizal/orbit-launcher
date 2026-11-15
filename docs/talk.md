@@ -115,20 +115,23 @@ GET /v1/talk/history?limit=20
 
 ## Workspace assistant (BB)
 
-Talk is also Raiz's voice window into his BB workspace: he can ask how projects are going, and have the
+Talk is also Raiz's voice window into his BB workspaces (personal and work, see "Several workspaces"
+below): he can ask how projects are going, and have the
 companion start/message threads, create/update/comment tasks, save memories, or change Talk's voice and
 personality. **Nothing changes without a spoken "yes" on a later turn.** Watch side: no change — it plays
 whatever reply text/audio comes back.
 
 Code: `companion/src/orbit_notes/workspace.py` (bb reads + execution), `actions.py` (allowlist, pending
 action, audit, settings), `talk.py` (the turn). Tests: `companion/tests/test_workspace.py` (fake `bb` and
-fake `codex` on PATH).
+fake `codex` on PATH), `companion/tests/test_workspaces.py` (two fake bb servers: personal + work).
 
 ### Who does what
 
 - The **companion** runs `bb … --json` as the owner (it runs natively on the host; `bb` must be on the
-  service's PATH). It strips `BB_PROJECT_ID` / `BB_THREAD_ID` / `BB_ENVIRONMENT_ID` from the env so a
-  companion started from inside a BB thread never acts as that thread.
+  service's PATH). It drops **every inherited `BB_*` variable** (`BB_PROJECT_ID`, `BB_THREAD_ID`,
+  `BB_SERVER_URL`, `BB_DATA_DIR`, `BB_CLI`, …) and sets only the target workspace's `BB_DATA_DIR` +
+  `BB_SERVER_URL`, so a companion started from inside a BB thread never acts as that thread or talks to
+  the wrong workspace.
 - **Codex** stays read-only with no network: it only reads the evidence text and answers with JSON
   (`--output-schema`, also on `exec resume`). It never calls bb and never builds a command.
 - Still one Codex session per local date. The persona goes in the first turn; the **rules, the current talk
@@ -138,8 +141,8 @@ fake `codex` on PATH).
 ### Turn
 
 1. While whisper transcribes, the worker calls `Talker.warm()` → the workspace **index** is built in the
-   background (cached 3 min; `project list`, `thread list`, `tasks project list`, `tasks list` per task
-   project, in parallel, ~3 s).
+   background (per workspace, each cached 3 min, all workspaces in parallel; `project list`, `thread list`,
+   `tasks project list`, `tasks list` per task project, in parallel, ~3 s).
    Index = snapshot time; projects (id, name, repo path); the 30 most recently updated threads (title,
    project, status, "updated 3 h ago (Nov 14 07:10)", waiting-for-input); open tasks (≤ 40) and tasks
    finished in the last 7 days (≤ 15). Unreadable parts are listed as "NOT AVAILABLE (treat as no
@@ -147,11 +150,11 @@ fake `codex` on PATH).
 2. Codex answers with:
    ```json
    {"reply": "…",
-    "need_details": {"threads": ["thr_…"], "tasks": ["ABC-12"], "memory": [{"query": "…", "project": ""}], "projects": ["orbit-launcher"],
+    "need_details": {"threads": ["thr_…"], "tasks": ["ABC-12"], "memory": [{"query": "…", "project": "", "workspace": ""}], "projects": ["orbit-launcher"],
                      "recall": [{"query": "…", "from": "YYYY-MM-DD|", "to": "YYYY-MM-DD|"}]},
     "confirmation": "confirm | cancel | none",
     "proposed_action": {"kind": "none | thread_spawn | thread_tell | task_create | task_update | task_comment | memory_add | settings | diary_reflection | memory_fact | memory_forget",
-                        "summary": "…", "params_json": "{…}"},
+                        "summary": "…", "params_json": "{…}", "workspace": "personal | work | … | \"\" (local kinds)"},
     "memory": {"facts": [{"text", "topic", "kind", "confidence", "relation", "fact_id"}], "tags": [{"kind", "name"}]}}
    ```
    `need_details.recall`, `memory` and the `memory_fact` / `memory_forget` kinds: docs/memory.md (Orbit's own
@@ -190,6 +193,8 @@ say plainly when there is none.
   | task_update | `bb tasks update <KEY> [--status=… --priority=… --title=… --due=…] --json` (no description rewrite) |
   | task_comment | `bb tasks comment <KEY> --body=… --author=Orbit Talk --json` |
   | memory_add | `bb memory add --scope=… --name=… --summary=… --details=… --reason=… [--kind=…] --json` (project scope: env `BB_PROJECT_ID`) |
+
+  Each runs with the pending action's workspace env (`BB_DATA_DIR` + `BB_SERVER_URL`, see "Several workspaces").
   | settings | local: `data_dir/talk_settings.json` |
 
 - `cancel` → pending cleared, "cancelled". Expired → dropped at the start of the next turn and Codex is told;
@@ -197,6 +202,70 @@ say plainly when there is none.
   → "There was nothing waiting for confirmation".
 - Every `proposed / rejected / replaced / confirmed / executed / failed / cancelled / expired / ignored`
   event is appended to `data_dir/talk_audit.jsonl` (executed entries include the argv and bb's JSON).
+
+### Several workspaces (personal + work)
+
+Raiz runs two independent bb desktop instances on the laptop, each with its own data dir and server:
+**personal** (`~/.bb`; Orbit itself lives here) and **work** (`~/.bb-work`). Talk reads and acts on both.
+
+- **Discovery** (`workspace.configured_specs`): every `~/.bb` (→ `personal`) and `~/.bb-<name>` (→ `<name>`)
+  dir that has a `bb-app-runtime.json` or a `bb.db` (so a workspace whose app is closed is still listed — as
+  unreachable — instead of vanishing). Personal first. Config overrides: `[[workspaces]]` tables (`name`,
+  `data_dir`, optional `server_url`) replace discovery; `talk_workspaces = ["personal"]` restricts (a
+  restricted-to workspace that is missing is reported unreachable, never replaced). `talk_workspace = "bb"`
+  still means "all of them", `"none"` = no bb at all. Nothing found → one `personal` workspace on bb's
+  defaults.
+- **Env per call**: the same installed `bb` CLI reaches each instance with **both** `BB_DATA_DIR=<dir>` and
+  `BB_SERVER_URL=<serverUrl>` — with only the data dir it silently talks to the personal server. The URL is
+  read from `<dir>/bb-app-runtime.json` **at every call** (it changes when bb restarts). File missing,
+  unreadable, no `serverUrl`, or its `pid` gone → that workspace is **unreachable**; nothing ever falls
+  back to another workspace.
+- **Index**: one per workspace, merged into one snapshot: `=== [personal] workspace (snapshot taken 10:32)
+  ===` sections; every project / thread / task / memory line starts with `[personal]` / `[work]`. An
+  unreachable workspace is a `NOT AVAILABLE` section ("no evidence from it this turn; never answer from the
+  other workspace instead"); the other one is unaffected. Refs are keyed by workspace
+  (`actions.AllRefs`), so equal ids in both never mix.
+- **Details** go to the workspace that owns the id (thread id, task prefix, project); an id found in both
+  is fetched from both, each section labelled (`## Thread thr_x [work]`). Codex can be explicit with
+  `"work:thr_…"` / `"work:WORK-3"` / `"work:tools"`, and `need_details.memory[].workspace` ("" = every
+  workspace; a memory search covers every project of each workspace it goes to). Git history: the project's
+  local repo path from its own workspace.
+- **Actions**: `proposed_action.workspace` (Codex chooses). The companion validates
+  (`actions.resolve_workspace`): the workspace must exist and the project / thread / task prefix must be in
+  it ("thread thr_x is not in your personal workspace; it is in your work workspace"). Omitted → inferred
+  from the referenced id; **unclear** (a global `memory_add`, or the id / prefix exists in both) → no
+  proposal, the reply asks: "… is it your personal or your work workspace? Nothing was changed yet."
+  (audit `rejected` with `needs: "workspace"`). With more than one workspace the confirmation always names it
+  (the companion prefixes "In your work workspace, task WORK-3: …" if Codex's reply doesn't say "work
+  workspace", and the pending summary gets "(in your work workspace, project tools)"); results say "Done in
+  your work workspace: …", failures "I tried in your work workspace, but …". Pending (`talk_pending.json`)
+  and audit entries carry `workspace`; execution uses exactly that workspace's env. A pending action from
+  before this change (no `workspace`) runs in the primary (first) workspace.
+- **Orbit orchestrator rule** (spawns become children of `orbit_orchestrator_thread`): only for
+  `thread_spawn` in `orbit_project` **in `orbit_workspace`** (default `personal`). The same project id in
+  another workspace is not Orbit.
+- **Briefing / inbox**: briefing evidence lists both workspaces' tasks and threads, labelled, plus a
+  `NOT AVAILABLE` line per unreachable workspace. The inbox thread producer watches each thread in the
+  workspace it was spawned / messaged in (audit `workspace`); refs are `thr_…` in the primary workspace (as
+  before) and `work:thr_…` elsewhere; with several workspaces titles start with "Work: " / "Personal: ".
+- **Version skew**: each bb app can be a different version from the installed CLI (work was 0.44 with CLI
+  0.49 on 2026-11-15). A failing command against a workspace whose `bb-app-runtime.json` version differs
+  from `bb --version` is reported as "bb tasks show is not available in the work workspace (bb 0.44.0, the
+  CLI is 0.49.0): …" (not for plain "not found" errors); it degrades that one item, never the turn. Checked
+  live against work 0.44: `project list`, `thread list`, `tasks project list`, `tasks list`, `thread log`,
+  `thread output`, `tasks show`, `memory search` (with and without `BB_PROJECT_ID`) all work; `thread
+  spawn` (incl. `--parent-thread`/`--new-environment`), `thread tell`, `tasks create/update/comment`
+  reach the server's own lookup (verified with nonexistent targets only); `memory add` works (it does not
+  check the project id — so the companion's own project validation is what keeps project memories right).
+  `thread log` fails for some threads in the CLI itself (`Cannot read properties of undefined (reading
+  'replace')`, 2 of 4 tried) — that detail is reported unreadable, the rest of the answer stands. `bb status` fails
+  (schema mismatch) — Talk doesn't use it. Updating the work bb app to the CLI's version should clear both.
+- **Privacy**: work-workspace content (project names and paths, thread titles and logs, tasks with their
+  descriptions and comments, memories) is sent to Codex exactly like personal content — same Codex login,
+  same session per day. Raiz asked for this. To keep work out, set `talk_workspaces = ["personal"]`.
+- Web UI → Talk assistant: lists the workspaces (bb version and data dir, or why it is unreachable — from
+  the runtime file only, no bb call), and shows the workspace as a badge on the pending action and on each
+  audit entry (`GET /ui/api/talk` → `workspaces`, `pending.workspace`, `audit[].workspace`).
 
 ### Voice & personality settings
 
@@ -217,7 +286,8 @@ the file, so either way the very next reply uses the new settings.
 
 ### Config, web UI
 
-- `talk_workspace = "bb"` (default) or `"none"` (Talk stays a journaling companion, no bb calls).
+- `talk_workspace = "bb"` (default: every discovered workspace) or `"none"` (Talk stays a journaling
+  companion, no bb calls); `talk_workspaces`, `[[workspaces]]`, `orbit_workspace`: "Several workspaces" above.
 - Web UI → **Talk assistant**: the pending action (with "confirm or cancel by voice — not from here"), the
   settings form, and the audit log (`GET /ui/api/talk`, loopback only).
 - Settings form (loopback only, no spoken confirmation — it's the owner at their own computer): voice

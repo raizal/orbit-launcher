@@ -375,12 +375,29 @@
   <div class="modal" role="presentation" onclick={(e) => e.target === e.currentTarget && closeTalk()}>
     <div class="card talk-card" role="dialog" aria-modal="true" aria-label="Talk assistant">
       <h2>Talk assistant</h2>
-      <p class="muted">BB workspace: {talk.workspace === 'bb' ? 'connected (read on demand, actions need your spoken yes)' : 'off'}</p>
+      <p class="muted">BB workspaces: {talk.workspace === 'bb' ? 'connected (read on demand, actions need your spoken yes)' : 'off'}</p>
+      {#if talk.workspaces?.length}
+        <ul class="workspaces">
+          {#each talk.workspaces as w (w.name)}
+            <li>
+              <span class="badge ws">{w.name}</span>
+              {#if w.reachable}
+                <span class="muted">bb {w.version ?? '?'} · {w.data_dir ?? 'bb default data dir'}</span>
+              {:else}
+                <span class="err">{w.error}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
 
       <h3>Waiting for confirmation</h3>
       {#if talk.pending}
         <div class="pending" class:expired={talk.pending.expired}>
-          <div><span class="badge">{talk.pending.kind}</span> {talk.pending.summary}</div>
+          <div>
+            {#if talk.pending.workspace}<span class="badge ws">{talk.pending.workspace}</span>{/if}
+            <span class="badge">{talk.pending.kind}</span> {talk.pending.summary}
+          </div>
           <pre>{JSON.stringify(talk.pending.params, null, 1)}</pre>
           <p class="muted small-print">
             Proposed {fmtTime(talk.pending.created_at)} ·
@@ -466,6 +483,7 @@
           <li>
             <span class="num muted">{fmtTime(e.at)}</span>
             <span class="badge ev-{e.event}">{e.event}</span>
+            {#if e.workspace}<span class="badge ws">{e.workspace}</span>{/if}
             <span>{e.kind ?? ''}</span>
             <span>{e.summary ?? ''}</span>
             {#if e.result_text}<div class="muted">{e.result_text}</div>{/if}
@@ -480,6 +498,8 @@
 {/if}
 
 <style>
+  .workspaces { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+  .badge.ws { color: var(--info); border: 1px solid var(--info); background: transparent; text-transform: none; }
   .mood-chart { width: 100%; height: auto; display: block; margin-bottom: 8px; }
   .mood-chart .grid { stroke: var(--line); stroke-width: 1; }
   .mood-chart .grid.zero { stroke: var(--muted); }

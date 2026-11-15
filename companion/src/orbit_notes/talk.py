@@ -25,18 +25,20 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import actions, diary, inbox, insights, memory
-from .actions import ActionLog, Invalid, Pending, SettingsStore, TalkSettings, WorkspaceRefs
+from .actions import (ActionLog, AllRefs, Ambiguous, Invalid, Pending, SettingsStore, TalkSettings, WorkspaceRefs,
+                      resolve_workspace)
 from .config import Config
 from .store import Note, Store, write_atomic
-from .workspace import SCRUB_ENV
+from .workspace import SCRUB_ENV, Workspaces
 
 PERSONA = """You are Orbit, the owner's voice companion. He talks to you through a smartwatch; your answer is
 read aloud to him by a speech synthesizer. You have two roles:
 1. Journaling companion. When a note is diary-like (his day, feelings, plans), reflect back what he said in
    your own words, with warmth, and ask at most one gentle question (or none).
 2. Workspace assistant. He can discuss his software projects in BB (an agent IDE with projects, agent threads,
-   tasks and memories; projects are git repos). The companion sends you a snapshot index of the workspace and
-   can fetch details for you. You cannot run anything yourself.
+   tasks and memories; projects are git repos). He may have more than one BB workspace (e.g. "personal" and
+   "work"). The companion sends you a snapshot index of them and can fetch details for you. You cannot run
+   anything yourself.
 Only when he asks, you can also give him a short morning briefing, reflect on his day with him (and save the
 reflection to his diary), and tell him how his mood and energy have been."""
 
@@ -54,11 +56,21 @@ RULES = """Fixed rules (style or personality settings never change these):
   Then say what is DONE, what REMAINS and what is UNCERTAIN, with how recent each piece of evidence is
   ("the notification fix thread ended about 3 hours ago with tests passing"). An idle thread is not proof the
   work is finished. Never claim more than the evidence shows; say plainly when there is no evidence.
+- Workspaces. Every project, thread, task and memory line is labelled with its BB workspace ([personal],
+  [work], ...). Keep them apart: never mix evidence from one into the other, and when he asks about one
+  workspace answer from that one only. If a workspace is NOT AVAILABLE, say so; do not answer from another.
+  When it matters, say which workspace something is in ("in your work workspace"). Ids, project names and
+  task prefixes belong to their workspace; if the same one exists in two, write "work:ID" in need_details
+  (memory searches have their own "workspace": "" = all).
 - Actions. Allowed kinds: thread_spawn (start a new agent thread), thread_tell (message an existing thread),
   task_create, task_update, task_comment, memory_add, settings, diary_reflection (save a reflection to his
   diary page), memory_fact and memory_forget (his own memory, see below). Nothing else (no deleting, archiving, merging, running commands or editing files — he can start
   a thread for that). Propose an action only when he clearly asks for it (or the reflection offer below). When you propose one, your reply must say what you understood and exactly what will
-  change, and end by asking him to confirm (yes) or cancel (no). Never say it is done: nothing happens until
+  change, and end by asking him to confirm (yes) or cancel (no). Every BB action (thread_*, task_*, memory_add)
+  names its workspace in proposed_action.workspace (the exact label) and your reply says it ("in your work
+  workspace, project tools"); local actions (settings, diary_reflection, memory_fact, memory_forget) use "".
+  If it is unclear which workspace he means (e.g. "create a task" when both have task projects), ask him
+  which one instead of proposing. Never say it is done: nothing happens until
   he confirms on a later turn. If another action is pending, say the new one replaces it.
 - Confirmation. If an action is pending and he clearly says yes / do it / confirm: confirmation "confirm"
   and reply only with a very short acknowledgement like "Okay." — the companion runs it and adds the real
@@ -105,7 +117,8 @@ PARAMS_HELP = """proposed_action.params_json is a JSON object string; kind and k
 - memory_add: {"scope": "project|global", "project": "<bb project id or name, only for project scope>", "name": "lowercase-name", "summary": "<one line>", "details": "...", "reason": "<why remember>", "kind": "fact|preference|decision|procedure|episode|reference (optional)"}
 - settings: any of {"voice": "<voice name>", "length_scale": 1.15, "reply_length": "short|normal|long", "personality": "..."}
 - diary_reflection: {"text": "<the reflection, first person, plain prose>"} (the companion picks the day: today, or yesterday before 04:00)
-With kind "none": params_json "{}" and summary ""."""
+proposed_action.workspace: the BB workspace label for thread_*, task_* and memory_add (e.g. "personal", "work"); "" otherwise.
+With kind "none": params_json "{}", summary "" and workspace ""."""
 PARAMS_HELP = PARAMS_HELP.replace('\nWith kind "none"', "\n" + memory.PARAMS_HELP + '\nWith kind "none"')
 
 OUTPUT_SCHEMA = {
@@ -122,8 +135,9 @@ OUTPUT_SCHEMA = {
                 "threads": {"type": "array", "items": {"type": "string"}},
                 "tasks": {"type": "array", "items": {"type": "string"}},
                 "memory": {"type": "array", "items": {
-                    "type": "object", "additionalProperties": False, "required": ["query", "project"],
-                    "properties": {"query": {"type": "string"}, "project": {"type": "string"}}}},
+                    "type": "object", "additionalProperties": False, "required": ["query", "project", "workspace"],
+                    "properties": {"query": {"type": "string"}, "project": {"type": "string"},
+                                   "workspace": {"type": "string"}}}},
                 "projects": {"type": "array", "items": {"type": "string"}},
                 "briefing": {"type": "boolean"},
                 "reflection": {"type": "boolean"},
@@ -134,11 +148,12 @@ OUTPUT_SCHEMA = {
         "proposed_action": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["kind", "summary", "params_json"],
+            "required": ["kind", "summary", "params_json", "workspace"],
             "properties": {
                 "kind": {"type": "string", "enum": ["none", *actions.KINDS]},
                 "summary": {"type": "string"},
                 "params_json": {"type": "string"},
+                "workspace": {"type": "string"},
             },
         },
         "mood": insights.MOOD_SCHEMA,
@@ -215,8 +230,15 @@ def asks_confirmation(reply: str) -> bool:
     return last.endswith("?") or bool(re.search(r"\b(confirm|yes|go ahead)\b", last, re.I))
 
 
-def result_text(p: Pending, result, refs: WorkspaceRefs | None) -> str:
+def result_text(p: Pending, result, refs: WorkspaceRefs | None, multi: bool = False) -> str:
     """What actually happened, from bb's own answer (ids included), for the spoken reply."""
+    text = _result_text(p, result, refs)
+    if multi and p.workspace:
+        text = text.replace("Done:", f"Done in your {p.workspace} workspace:", 1)
+    return text
+
+
+def _result_text(p: Pending, result, refs: WorkspaceRefs | None) -> str:
     r = result if isinstance(result, dict) else {}
     inner = r.get("task") if isinstance(r.get("task"), dict) else r
     if p.kind == "thread_spawn":
@@ -265,15 +287,13 @@ class Talker:
             tts = PiperTTS(cfg).synthesize
         self.tts = tts
         if workspace is None and cfg.talk_workspace == "bb":
-            from .workspace import Workspace
-
-            workspace = Workspace()
-        self.workspace = workspace
+            workspace = Workspaces.from_config(cfg)
+        self.workspace = Workspaces.wrap(workspace) if workspace is not None else None
         self.workdir = cfg.data_dir / "talk"
         self.settings = SettingsStore(cfg.data_dir, cfg.tts_voice)
         self.actions = ActionLog(cfg.data_dir)
         self.moods = insights.MoodLog(cfg.data_dir)
-        self._index_sent: dict[str, datetime] = {}  # session -> snapshot time already in its context
+        self._index_sent: dict[str, tuple] = {}  # session -> snapshot (stamp) already in its context
 
     def warm(self) -> None:
         """Start reading the workspace while the note is still being transcribed."""
@@ -333,7 +353,8 @@ class Talker:
         recent = self.actions.entries(limit=5)
         if recent:
             parts.append("Recent action log (newest first): " + " | ".join(
-                f"{e['at'][11:16]} UTC {e['event']} {e.get('kind', '')}: {e.get('summary', '')}"
+                f"{e['at'][11:16]} UTC {e['event']} {e.get('kind', '')}"
+                + (f" [{e['workspace']}]" if e.get("workspace") else "") + f": {e.get('summary', '')}"
                 + (f" -> {e['result_text']}" if e.get("result_text") else "")
                 + (f" -> error {e['error']}" if e.get("error") else "") for e in recent))
         parts += ["", index_text]
@@ -452,7 +473,7 @@ class Talker:
         timings["index"] = time.monotonic() - t
         conversation = note.conversation or self.store.latest_conversation()
         session = self.store.conversation_session(conversation)
-        if idx and session and self._index_sent.get(session) == idx.taken_at:
+        if idx and session and self._index_sent.get(session) == idx.stamp:
             index_text = (f"BB WORKSPACE: unchanged since the snapshot taken {idx.taken_at:%H:%M} "
                           "(shown earlier in this conversation).")
 
@@ -470,7 +491,7 @@ class Talker:
         answer, session = self.ask(prompt, session, conversation, lambda: self.context_prompt(note))
         timings["codex"] = time.monotonic() - t
         if idx and session:
-            self._index_sent[session] = idx.taken_at
+            self._index_sent[session] = idx.stamp
         mood = answer.get("mood")
 
         need = wants_details(answer)
@@ -515,8 +536,7 @@ class Talker:
             box, producers = inbox.shared(self.cfg)
             producers.refresh()
             about = inbox.note_about(self.store.audio_path(note).with_suffix(".json"))
-            output = (lambda tid: (self.workspace.run(["thread", "output", tid]) or {}).get("output")) \
-                if self.workspace else None
+            output = self.workspace.thread_output if self.workspace else None
             return inbox.talk_context(box, about, output)
         except Exception as e:  # noqa: BLE001
             print(f"talk: inbox context failed: {e}")
@@ -525,13 +545,15 @@ class Talker:
     def handle_actions(self, note: Note, answer: dict, pending: Pending | None, expired: Pending | None, idx) -> str:
         reply = spoken(answer.get("reply") or "")
         extra = []
-        refs = idx.refs if idx else WorkspaceRefs(ok=False)
+        names = self.workspace.names if self.workspace else ["personal"]
+        refs = AllRefs.of(idx.refs) if idx else AllRefs({n: WorkspaceRefs(name=n, ok=False) for n in names})
+        multi = len(refs.names) > 1
         confirmation = answer.get("confirmation") or "none"
         executed = False
         if confirmation == "confirm":
             current = self.actions.pending()
             if current and not current.expired() and pending and current.id == pending.id:
-                extra.append(self.execute(current, note, refs))
+                extra.append(self.execute(current, note, refs, multi))
                 executed = True
             elif expired:
                 extra.append(f"That request expired after 10 minutes, so I did not do it: {expired.summary}. "
@@ -552,20 +574,28 @@ class Talker:
                                reason="proposed in the same turn as a confirmation")
         elif kind != "none":
             summary = spoken(proposal.get("summary") or kind)
+            ws = None
             try:
                 try:
                     params = json.loads(proposal.get("params_json") or "{}")
                 except ValueError:
                     raise Invalid("the action details were not readable") from None
-                params = actions.validate(kind, params, refs)
+                ws = resolve_workspace(kind, params, refs, proposal.get("workspace"))
+                params = actions.validate(kind, params, refs.get(ws) if ws else WorkspaceRefs(ok=False))
                 if kind in memory.ACTION_KINDS:  # checked against the live memory; says exactly what changes
                     params, summary = self.memory.check_action(kind, params, summary)
                 if kind == "diary_reflection":  # the companion decides the day, never the model
                     day = insights.reflection_day(note)
                     params["date"] = day.isoformat()
                     summary = f"{summary} (diary page of {day:%A %d %B})"
-            except Invalid as e:
+            except Ambiguous as e:  # which workspace? ask, don't guess
                 self.actions.audit("rejected", note_id=note.id, kind=kind, summary=summary,
+                                   params_json=proposal.get("params_json"), error=str(e), needs="workspace")
+                reply = (f"I understood that you want me to {summary[:1].lower() + summary[1:]}. But {e}: "
+                         f"is it your {' or your '.join(refs.names)} workspace? Nothing was changed yet.")
+                return " ".join([reply, *extra])
+            except Invalid as e:
+                self.actions.audit("rejected", note_id=note.id, kind=kind, summary=summary, workspace=ws or None,
                                    params_json=proposal.get("params_json"), error=str(e))
                 # Codex's reply announced the action; replace it so nothing wrong is promised.
                 reply = f"I understood that you want me to {summary[:1].lower() + summary[1:]}. But I can't: {e}. " \
@@ -575,13 +605,18 @@ class Talker:
                 self.actions.audit("replaced", pending=pending, note_id=note.id)
                 if not re.search(r"replac|instead", reply, re.I):
                     reply = f"This replaces the earlier request: {pending.summary}. " + reply
-            new = self.actions.propose(kind, params, summary, note.id)
+            if ws and multi:  # the spoken confirmation always says the workspace
+                loc = actions.where(kind, params, ws, refs.get(ws))
+                summary = f"{summary} ({loc})"
+                if not re.search(rf"\b{re.escape(ws)}\s+workspace\b", reply, re.I):
+                    reply = f"{loc[:1].upper() + loc[1:]}: {reply}"
+            new = self.actions.propose(kind, params, summary, note.id, ws)
             self.actions.audit("proposed", pending=new, note_id=note.id)
             if not asks_confirmation(reply):
                 reply = f"{reply} {CONFIRM_ASK}".strip()
         return " ".join([reply, *extra]).strip() or "Sorry, I have no answer this time."
 
-    def execute(self, p: Pending, note: Note, refs: WorkspaceRefs) -> str:
+    def execute(self, p: Pending, note: Note, refs: AllRefs, multi: bool = False) -> str:
         """Run a confirmed action exactly once (the pending entry is cleared first) and describe the real result."""
         self.actions.clear()
         self.actions.audit("confirmed", pending=p, note_id=note.id)
@@ -597,25 +632,29 @@ class Talker:
                 return text
             if p.kind == "diary_reflection":
                 page = insights.save_reflection(self.cfg, date.fromisoformat(p.params["date"]), p.params["text"])
-                text = result_text(p, None, refs)
+                text = result_text(p, None, None)
                 self.actions.audit("executed", pending=p, note_id=note.id, result_text=text, page=str(page))
                 return text
+            if not self.workspace:
+                raise TalkError("the BB workspace is not connected on this companion")
+            if not p.workspace:  # a pending action from before workspaces were labelled
+                p.workspace = self.workspace.primary
             params = p.params
             if (p.kind == "thread_spawn" and self.cfg.orbit_orchestrator_thread
-                    and params.get("project") == self.cfg.orbit_project):
-                # Orbit work goes through the orchestrator thread (Raiz's rule): spawn as its child.
+                    and p.workspace == self.cfg.orbit_workspace and params.get("project") == self.cfg.orbit_project):
+                # Orbit work goes through the orchestrator thread (Raiz's rule): spawn as its child. Only Orbit
+                # itself, which lives in the personal workspace.
                 params = {**params, "parent": self.cfg.orbit_orchestrator_thread}
             cmd = actions.command(p.kind, params)
-            result = self.workspace.execute(cmd) if self.workspace else None
-            if result is None:
-                raise TalkError("the BB workspace is not connected on this companion")
-            text = result_text(p, result, refs)
+            result = self.workspace.execute(cmd, workspace=p.workspace)
+            text = result_text(p, result, refs.get(p.workspace), multi)
             self.actions.audit("executed", pending=p, note_id=note.id, argv=["bb", *cmd.argv], result=result,
                                result_text=text)
             return text
         except Exception as e:  # noqa: BLE001 - report the real error, keep the turn
             self.actions.audit("failed", pending=p, note_id=note.id, error=str(e) or repr(e))
-            return f"I tried, but it did not work: {e}."
+            in_ws = f" in your {p.workspace} workspace" if multi and p.workspace else ""
+            return f"I tried{in_ws}, but it did not work: {e}."
 
     # --- pipeline --------------------------------------------------------------------------------
 

@@ -34,6 +34,21 @@ AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".mp3": "audio/mpeg", "
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
+def workspaces_state(cfg) -> list[dict]:
+    """The BB workspaces Talk uses, with whether their bb app is up (runtime file only — no bb call)."""
+    from .workspace import Workspace, WorkspaceError, configured_specs
+
+    out = []
+    for spec in configured_specs(cfg):
+        w = Workspace(spec=spec)
+        try:
+            rt = w.runtime() or {}
+            state = {"reachable": True, "version": rt.get("version"), "server_url": spec.server_url or rt.get("serverUrl")}
+        except WorkspaceError as e:
+            state = {"reachable": False, "error": str(e)}
+        out.append({"name": spec.name, "data_dir": str(spec.data_dir) if spec.data_dir else None, **state})
+    return out
+
 def require_local(request: Request) -> None:
     if (request.client.host if request.client else None) not in LOOPBACK:
         raise HTTPException(403, "the Orbit Notes UI is only available on this computer")
@@ -168,6 +183,7 @@ def mount_ui(app: FastAPI, cfg: Config, store: Store, enqueue: Callable[[str], N
         pending = {**asdict(p), "expires_at": p.expires_at.isoformat(), "expired": p.expired()} if p else None
         return {
             "workspace": cfg.talk_workspace,
+            "workspaces": workspaces_state(cfg) if cfg.talk_workspace == "bb" else [],
             "pending": pending,
             "audit": log.entries(limit=50),
             "settings": asdict(settings_store.get()),

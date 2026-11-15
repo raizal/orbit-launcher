@@ -118,14 +118,19 @@ class Invalid(ValueError):
     """A proposed action that is not allowed or has bad params. The message is spoken to the owner."""
 
 
+class Ambiguous(Invalid):
+    """It is not clear which BB workspace is meant: the companion asks instead of guessing."""
+
+
 @dataclass
 class WorkspaceRefs:
-    """What the companion knows exists (from the workspace index), to check references against."""
+    """What the companion knows exists in ONE workspace (from its index), to check references against."""
 
     projects: dict[str, dict] = field(default_factory=dict)  # bb project id -> {name, path}
     threads: dict[str, dict] = field(default_factory=dict)  # thread id -> {title, project}
     trackers: dict[str, str] = field(default_factory=dict)  # tracker prefix -> name
     ok: bool = True  # False when the index could not be read
+    name: str = "personal"  # the workspace
 
     def project_id(self, ref: str) -> str:
         ref = ref.strip()
@@ -136,6 +141,114 @@ class WorkspaceRefs:
             return matches[0]
         raise Invalid(f"I don't know a project called {ref!r}" if self.ok else
                       "I couldn't read the workspace to check the project")
+
+    def has_project(self, ref: str) -> bool:
+        try:
+            self.project_id(ref)
+            return True
+        except Invalid:
+            return False
+
+
+def split_ref(ref: str) -> tuple[str | None, str]:
+    """"work:thr_x" -> ("work", "thr_x"); "thr_x" -> (None, "thr_x")."""
+    ref = str(ref).strip()
+    head, sep, tail = ref.partition(":")
+    if sep and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}", head.strip().lower()) and tail.strip():
+        return head.strip().lower(), tail.strip()
+    return None, ref
+
+
+@dataclass
+class AllRefs:
+    """Refs of every workspace, keyed by workspace name (ids are only unique within a workspace)."""
+
+    workspaces: dict[str, WorkspaceRefs] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, refs) -> AllRefs:
+        return refs if isinstance(refs, AllRefs) else cls({refs.name: refs})
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.workspaces)
+
+    @property
+    def ok(self) -> bool:
+        return all(r.ok for r in self.workspaces.values())
+
+    def get(self, name: str) -> WorkspaceRefs:
+        return self.workspaces.get(name) or WorkspaceRefs(name=name, ok=False)
+
+
+LOCAL_KINDS = ("settings", "diary_reflection", "memory_fact", "memory_forget")  # not a BB workspace action
+
+
+def _reference(kind: str, params: dict):
+    """(what is referenced, in words; does a workspace's refs have it?) — None if nothing points to a workspace."""
+    if kind == "thread_spawn" or (kind == "memory_add" and params.get("scope") == "project"):
+        ref = str(params.get("project") or "").strip()
+        return (f"the project {ref!r}", lambda r: r.has_project(ref)) if ref else None
+    if kind == "thread_tell":
+        tid = str(params.get("thread_id") or "").strip()
+        return (f"thread {tid}", lambda r: tid in r.threads) if tid else None
+    if kind == "task_create":
+        prefix = str(params.get("project") or "").strip().upper()
+        return (f"the task project {prefix}", lambda r: prefix in r.trackers) if prefix else None
+    if kind in ("task_update", "task_comment"):
+        key = str(params.get("key") or "").strip().upper()
+        prefix = key.split("-", 1)[0]
+        return (f"task {key}", lambda r: prefix in r.trackers) if key else None
+    return None
+
+
+def resolve_workspace(kind: str, params: dict, refs: AllRefs, requested: str | None) -> str | None:
+    """The workspace a proposed BB action runs in. Codex names it; the companion checks that it exists and
+    that the project / thread / task belongs to it. Unnamed → inferred from the id; unclear → Ambiguous
+    (the companion asks). None for local kinds (settings, diary, Orbit memory)."""
+    if kind in LOCAL_KINDS or kind not in PARAMS or not isinstance(params, dict):
+        return None
+    names = refs.names
+    req = (requested or "").strip().lower()
+    ref = _reference(kind, params)
+    if req:
+        if req not in refs.workspaces:
+            raise Invalid(f"there is no BB workspace called {req!r} (I know {' and '.join(names)})")
+        r = refs.get(req)
+        if ref and r.ok and not ref[1](r):
+            elsewhere = [n for n in names if n != req and ref[1](refs.get(n))]
+            raise Invalid(f"{ref[0]} is not in your {req} workspace"
+                          + (f"; it is in your {elsewhere[0]} workspace" if len(elsewhere) == 1 else ""))
+        return req
+    if len(names) == 1:
+        return names[0]
+    if ref is None:
+        raise Ambiguous("I don't know which workspace it is for")
+    owners = [n for n in names if ref[1](refs.get(n))]
+    if len(owners) == 1:
+        return owners[0]
+    if owners:
+        raise Ambiguous(f"{ref[0]} exists in both your {' and '.join(owners)} workspaces")
+    unread = [n for n in names if not refs.get(n).ok]
+    if unread:
+        raise Invalid(f"I couldn't read your {' and '.join(unread)} workspace to check {ref[0]}")
+    raise Invalid(f"I can't find {ref[0]} in any of your workspaces")
+
+
+def where(kind: str, params: dict, workspace: str, refs: WorkspaceRefs) -> str:
+    """"in your work workspace, project tools" — for the spoken confirmation."""
+    out = f"in your {workspace} workspace"
+    if kind == "thread_spawn" or (kind == "memory_add" and params.get("scope") == "project"):
+        out += f", project {refs.projects.get(params['project'], {}).get('name', params['project'])}"
+    elif kind == "thread_tell":
+        out += f", thread “{refs.threads.get(params['thread_id'], {}).get('title') or params['thread_id']}”"
+    elif kind == "task_create":
+        out += f", task project {params['project']}"
+    elif kind in ("task_update", "task_comment"):
+        out += f", task {params['key']}"
+    elif kind == "memory_add":
+        out += ", as a global memory"
+    return out
 
 
 THREAD_RE = re.compile(r"thr_[a-z0-9]{6,20}")
@@ -376,6 +489,7 @@ class Pending:
     summary: str
     created_at: str
     note_id: str | None = None
+    workspace: str | None = None  # BB workspace it runs in (None: a local action)
 
     @property
     def expires_at(self) -> datetime:
@@ -397,13 +511,15 @@ class ActionLog:
         if not self.pending_path.exists():
             return None
         try:
-            return Pending(**json.loads(self.pending_path.read_text()))
+            raw = json.loads(self.pending_path.read_text())
+            return Pending(**{k: v for k, v in raw.items() if k in Pending.__dataclass_fields__})
         except (ValueError, TypeError) as e:
             print(f"talk: dropping unreadable pending action: {e}")
             return None
 
-    def propose(self, kind: str, params: dict, summary: str, note_id: str | None) -> Pending:
-        p = Pending(uuid.uuid4().hex[:8], kind, params, summary, now_utc().isoformat(), note_id)
+    def propose(self, kind: str, params: dict, summary: str, note_id: str | None,
+                workspace: str | None = None) -> Pending:
+        p = Pending(uuid.uuid4().hex[:8], kind, params, summary, now_utc().isoformat(), note_id, workspace)
         write_atomic(self.pending_path, json.dumps(asdict(p), indent=1).encode())
         return p
 
@@ -414,6 +530,8 @@ class ActionLog:
         entry = {"at": now_utc().isoformat(), "event": event, "note_id": note_id}
         if pending:
             entry.update(action_id=pending.id, kind=pending.kind, summary=pending.summary, params=pending.params)
+            if pending.workspace:
+                entry["workspace"] = pending.workspace
         entry.update(extra)
         with self._lock, self.audit_path.open("a") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")

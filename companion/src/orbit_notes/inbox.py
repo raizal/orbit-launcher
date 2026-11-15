@@ -33,6 +33,7 @@ KINDS = ("note", "thread_done", "thread_input", "thread_error", "app_update")
 WATCH_WINDOW = timedelta(days=7)  # threads spawned/told by Talk longer ago than this are not watched
 MENTION_WINDOW = timedelta(hours=24)  # unread items older than this are not brought up in Talk
 MENTION_MAX = 3
+THREAD_REF_RE = re.compile(r"(?:[a-z0-9][a-z0-9_-]{0,30}:)?thr_[A-Za-z0-9]+")  # "thr_…" or "work:thr_…"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -265,10 +266,11 @@ def short_title(title: str, limit: int = 48) -> str:
     return title if len(title) <= limit else title[:limit - 1].rstrip() + "…"
 
 
-def watched_threads(audit_path: Path, now: datetime) -> dict[str, dict]:
+def watched_threads(audit_path: Path, now: datetime) -> dict[tuple, dict]:
     """Threads Talk spawned or messaged (talk_audit.jsonl `executed` entries) in the watch window:
-    thread id -> {since: epoch ms of the latest spawn/tell, title}."""
-    out: dict[str, dict] = {}
+    (workspace or None for entries from before workspaces, thread id) -> {since: epoch ms of the latest
+    spawn/tell, title}."""
+    out: dict[tuple, dict] = {}
     if not audit_path.exists():
         return out
     for line in audit_path.read_text().splitlines():
@@ -288,7 +290,7 @@ def watched_threads(audit_path: Path, now: datetime) -> dict[str, dict]:
             tid, title = (e.get("params") or {}).get("thread_id"), None
         if not isinstance(tid, str) or not tid.startswith("thr_"):
             continue
-        w = out.setdefault(tid, {"since": 0, "title": None})
+        w = out.setdefault((e.get("workspace"), tid), {"since": 0, "title": None})
         w["since"] = max(w["since"], int(at.timestamp() * 1000))
         w["title"] = title or w["title"]
     return out
@@ -305,55 +307,76 @@ class ThreadsProducer:
     name = "threads"
 
     def __init__(self, workspace, audit_path: Path):
-        self.workspace, self.audit_path = workspace, Path(audit_path)
+        from .workspace import Workspaces
+
+        self.workspace, self.audit_path = Workspaces.wrap(workspace), Path(audit_path)
 
     def run(self, inbox: Inbox) -> list[NewItem]:
+        """Per workspace: one `bb thread list` (only workspaces with watched threads). A workspace that can't be
+        read is skipped this run; the others still produce. Refs/keys: "thr_…" in the primary workspace (as
+        before), "<workspace>:thr_…" elsewhere; with several workspaces the title says which one."""
+        ws_all = self.workspace
         now = now_utc()
-        watched = watched_threads(self.audit_path, now)
+        watched: dict[tuple, dict] = {}
+        for (ws, tid), w in watched_threads(self.audit_path, now).items():  # old entries: primary workspace
+            m = watched.setdefault((ws or ws_all.primary, tid), {"since": 0, "title": None})
+            m["since"], m["title"] = max(m["since"], w["since"]), w["title"] or m["title"]
         st = inbox.state(self.name)
         first_run = st.setdefault("first_run_ms", int(now.timestamp() * 1000))
         seen: dict = st.setdefault("threads", {})
         items: list[NewItem] = []
-        if watched:
-            listed = {t["id"]: t for t in self.workspace.run(["thread", "list"]) if isinstance(t, dict) and "id" in t}
-            for tid, w in watched.items():
-                t = listed.get(tid)
-                if not t or t.get("archivedAt") or t.get("deletedAt"):
-                    continue
-                s = seen.setdefault(tid, {})
-                title = short_title(t.get("title") or w["title"] or t.get("titleFallback"))
-                updated = int(t.get("updatedAt") or 0)
-                fresh = updated > max(w["since"], first_run)
-                if t.get("hasPendingInteraction"):
-                    if not s.get("input"):
-                        s["input"] = True
-                        if fresh:
-                            items.append(NewItem(f"{title} needs your input", "It is waiting for your answer in BB.",
-                                                 "thread_input", tid, f"thread:{tid}:input:{updated}"))
-                    continue
-                s["input"] = False
-                status = t.get("status")
-                if status == "error" and s.get("error_at") != updated:
-                    s["error_at"] = updated
+        listed: dict[str, dict | None] = {}
+        for ws in sorted({ws for ws, _ in watched}):
+            try:
+                listed[ws] = {t["id"]: t for t in ws_all.run(["thread", "list"], workspace=ws)
+                              if isinstance(t, dict) and "id" in t}
+            except Exception as e:  # noqa: BLE001 - try again on the next run; keep its state
+                print(f"inbox: bb thread list ({ws}) failed: {e}")
+                listed[ws] = None
+        for (ws, tid), w in watched.items():
+            ref = ws_all.ref_for(ws, tid)
+            if listed.get(ws) is None:
+                continue
+            t = listed[ws].get(tid)
+            if not t or t.get("archivedAt") or t.get("deletedAt"):
+                continue
+            s = seen.setdefault(ref, {})
+            title = short_title(t.get("title") or w["title"] or t.get("titleFallback"))
+            if ws_all.multi:
+                title = f"{ws.capitalize()}: {title}"
+            updated = int(t.get("updatedAt") or 0)
+            fresh = updated > max(w["since"], first_run)
+            if t.get("hasPendingInteraction"):
+                if not s.get("input"):
+                    s["input"] = True
                     if fresh:
-                        items.append(NewItem(f"{title} stopped with an error", "Its last turn failed; open it in BB.",
-                                             "thread_error", tid, f"thread:{tid}:error:{updated}"))
-                elif status == "idle" and s.get("idle_at") != updated:
-                    s["idle_at"] = updated
-                    try:
-                        output = (self.workspace.run(["thread", "output", tid]) or {}).get("output") or ""
-                    except Exception as e:  # noqa: BLE001 - try again on the next run
-                        s.pop("idle_at", None)
-                        print(f"inbox: bb thread output {tid} failed: {e}")
-                        continue
-                    digest = hashlib.sha1(output.encode()).hexdigest()[:16]
-                    if digest != s.get("output"):
-                        s["output"] = digest
-                        if fresh:
-                            items.append(NewItem(f"{title} is done", summary(output) or "It finished its turn.",
-                                                 "thread_done", tid, f"thread:{tid}:done:{digest}"))
+                        items.append(NewItem(f"{title} needs your input", "It is waiting for your answer in BB.",
+                                             "thread_input", ref, f"thread:{ref}:input:{updated}"))
+                continue
+            s["input"] = False
+            status = t.get("status")
+            if status == "error" and s.get("error_at") != updated:
+                s["error_at"] = updated
+                if fresh:
+                    items.append(NewItem(f"{title} stopped with an error", "Its last turn failed; open it in BB.",
+                                         "thread_error", ref, f"thread:{ref}:error:{updated}"))
+            elif status == "idle" and s.get("idle_at") != updated:
+                s["idle_at"] = updated
+                try:
+                    output = ws_all.thread_output(ref) or ""
+                except Exception as e:  # noqa: BLE001 - try again on the next run
+                    s.pop("idle_at", None)
+                    print(f"inbox: bb thread output {ref} failed: {e}")
+                    continue
+                digest = hashlib.sha1(output.encode()).hexdigest()[:16]
+                if digest != s.get("output"):
+                    s["output"] = digest
+                    if fresh:
+                        items.append(NewItem(f"{title} is done", summary(output) or "It finished its turn.",
+                                             "thread_done", ref, f"thread:{ref}:done:{digest}"))
         # Forget threads that left the window.
-        st["threads"] = {k: v for k, v in seen.items() if k in watched}
+        keep = {ws_all.ref_for(ws, tid) for ws, tid in watched}
+        st["threads"] = {k: v for k, v in seen.items() if k in keep}
         inbox.save_state(self.name, st)
         return items
 
@@ -391,9 +414,9 @@ def default_producers(cfg, inbox: Inbox, workspace=None) -> Producers:
     producers: list[Producer] = []
     if cfg.talk_workspace == "bb":
         if workspace is None:
-            from .workspace import Workspace
+            from .workspace import Workspaces
 
-            workspace = Workspace()
+            workspace = Workspaces.from_config(cfg)
         producers.append(ThreadsProducer(workspace, Path(cfg.data_dir) / "talk_audit.jsonl"))
     return Producers(inbox, producers)
 
@@ -437,7 +460,7 @@ def talk_context(inbox: Inbox, about: str | None, thread_output=None, now: datet
         parts.append(f"HE OPENED THIS INBOX ITEM ON HIS WATCH and is talking about it (received "
                      f"{item.created_at[:16].replace('T', ' ')} UTC):")
         parts.append(f"- {item.title}" + (f": {item.body}" if item.body else ""))
-        if item.ref and item.ref.startswith("thr_") and thread_output:
+        if item.ref and THREAD_REF_RE.fullmatch(item.ref) and thread_output:
             try:
                 out = (thread_output(item.ref) or "").strip()
             except Exception as e:  # noqa: BLE001

@@ -3,6 +3,8 @@
 A home-screen launcher and voice-note diary for a cheap round Android smartwatch, plus a laptop
 companion that transcribes, journals and talks back.
 
+![Talk and the recorder on the watch: recorder, Talk idle, listening, sending, thinking, speaking, scrolled reply, saved for later](docs/screenshots/talk.png)
+
 - **Watch app** (Kotlin, Jetpack Compose, one APK) for an "H10" round 360 × 360 Android 8.1 watch
   (not Wear OS, no Google services assumed):
   - **Audio diary** — record a note in one press; crash-safe recording in its own process (ADTS `.aac`);
@@ -38,3 +40,7 @@ companion/deploy/install.sh             # run the companion as a systemd user se
 
 Built for one specific watch and one person's setup; expect to adapt `docs/device-facts.md` assumptions
 for other hardware.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
